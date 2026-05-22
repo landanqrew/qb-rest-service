@@ -112,7 +112,7 @@ def test_list_default_returns_envelope_with_data_and_pagination(settings_env, to
         return _query_response([_customer("1"), _customer("2")])
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers")
+    resp = client.get("/v1/customers")
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body["data"], list)
@@ -127,7 +127,7 @@ def test_list_default_filters_to_active_customers(settings_env, token_store):
         return _query_response([_customer("1")])
 
     client, recorder = _make_client(token_store, handler)
-    resp = client.get("/customers")
+    resp = client.get("/v1/customers")
     assert resp.status_code == 200
     sql = recorder.last_query
     assert "Active = true" in sql
@@ -142,7 +142,7 @@ def test_active_false_includes_inactive_customers(settings_env, token_store):
         )
 
     client, recorder = _make_client(token_store, handler)
-    resp = client.get("/customers?active=false")
+    resp = client.get("/v1/customers?active=false")
     assert resp.status_code == 200
     sql = recorder.last_query
     # The SQL must NOT pin Active=true — that would silently drop inactive rows.
@@ -157,7 +157,7 @@ def test_modified_since_translates_to_qbo_metadata_filter(settings_env, token_st
         return _query_response([_customer("1")])
 
     client, recorder = _make_client(token_store, handler)
-    resp = client.get("/customers?modified_since=2026-01-01")
+    resp = client.get("/v1/customers?modified_since=2026-01-01")
     assert resp.status_code == 200
     sql = recorder.last_query
     assert "MetaData.LastUpdatedTime > '2026-01-01'" in sql
@@ -168,7 +168,7 @@ def test_modified_since_combines_with_active_filter(settings_env, token_store):
         return _query_response([_customer("1")])
 
     client, recorder = _make_client(token_store, handler)
-    resp = client.get("/customers?active=true&modified_since=2026-01-01")
+    resp = client.get("/v1/customers?active=true&modified_since=2026-01-01")
     assert resp.status_code == 200
     sql = recorder.last_query
     assert "Active = true" in sql
@@ -182,7 +182,7 @@ def test_limit_param_is_propagated_to_qbo(settings_env, token_store):
         return _query_response([_customer(str(i)) for i in range(5)])
 
     client, recorder = _make_client(token_store, handler)
-    resp = client.get("/customers?limit=5")
+    resp = client.get("/v1/customers?limit=5")
     assert resp.status_code == 200
     sql = recorder.last_query
     # We fetch limit+1 to detect has_more without a second round-trip.
@@ -205,7 +205,7 @@ def test_pagination_round_trip_returns_next_page(settings_env, token_store):
 
     client, _ = _make_client(token_store, handler)
 
-    resp = client.get("/customers?limit=2")
+    resp = client.get("/v1/customers?limit=2")
     assert resp.status_code == 200
     body = resp.json()
     assert [c["Id"] for c in body["data"]] == ["1", "2"]
@@ -213,7 +213,7 @@ def test_pagination_round_trip_returns_next_page(settings_env, token_store):
     cursor = body["pagination"]["next_cursor"]
     assert cursor
 
-    resp2 = client.get(f"/customers?limit=2&cursor={cursor}")
+    resp2 = client.get(f"/v1/customers?limit=2&cursor={cursor}")
     assert resp2.status_code == 200
     body2 = resp2.json()
     assert [c["Id"] for c in body2["data"]] == ["3"]
@@ -227,7 +227,7 @@ def test_pagination_has_more_false_on_last_page(settings_env, token_store):
         return _query_response([_customer("1"), _customer("2")])
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers?limit=5")
+    resp = client.get("/v1/customers?limit=5")
     body = resp.json()
     assert body["pagination"]["has_more"] is False
     assert body["pagination"].get("next_cursor") in (None,)
@@ -249,12 +249,12 @@ def test_pagination_next_cursor_advances_startposition(settings_env, token_store
         return _query_response([_customer("3")])
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers?limit=2")
+    resp = client.get("/v1/customers?limit=2")
     assert resp.status_code == 200
     cursor = resp.json()["pagination"]["next_cursor"]
     assert cursor
 
-    resp2 = client.get(f"/customers?limit=2&cursor={cursor}")
+    resp2 = client.get(f"/v1/customers?limit=2&cursor={cursor}")
     assert resp2.status_code == 200
     # Second SQL had STARTPOSITION 3.
     assert "STARTPOSITION 3" in captured["calls"][1]
@@ -266,7 +266,7 @@ def test_cursor_is_opaque_base64(settings_env, token_store):
         return _query_response([_customer(str(i)) for i in range(1, 4)])  # limit+1
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers?limit=2")
+    resp = client.get("/v1/customers?limit=2")
     cursor = resp.json()["pagination"]["next_cursor"]
     # Not a bare integer; decodes to one.
     assert not cursor.isdigit()
@@ -280,7 +280,7 @@ def test_invalid_cursor_returns_400_with_error_envelope(settings_env, token_stor
         pytest.fail("QBO should not be hit when the cursor is invalid")
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers?cursor=not-valid-base64!!!")
+    resp = client.get("/v1/customers?cursor=not-valid-base64!!!")
     assert resp.status_code == 400
     body = resp.json()
     assert body["error"]["code"] == "INVALID_CURSOR"
@@ -298,7 +298,7 @@ def test_malformed_modified_since_returns_400_without_hitting_qbo(
 
     client, _ = _make_client(token_store, handler)
     # Classic injection attempt — closes the date literal, adds a tautology.
-    resp = client.get("/customers?modified_since=2026-01-01' OR 'x'='x")
+    resp = client.get("/v1/customers?modified_since=2026-01-01' OR 'x'='x")
     assert resp.status_code == 400
     body = resp.json()
     assert body["error"]["code"] == "INVALID_PARAM"
@@ -314,7 +314,7 @@ def test_modified_since_rejects_semantically_invalid_dates(settings_env, token_s
         pytest.fail("QBO must not be hit for an invalid calendar date")
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers?modified_since=2026-02-30")
+    resp = client.get("/v1/customers?modified_since=2026-02-30")
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "INVALID_PARAM"
 
@@ -328,7 +328,7 @@ def test_modified_since_rejects_extended_iso_formats(settings_env, token_store):
         pytest.fail("QBO must not be hit for non-YYYY-MM-DD inputs")
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers?modified_since=20260101")  # basic ISO, no dashes
+    resp = client.get("/v1/customers?modified_since=20260101")  # basic ISO, no dashes
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "INVALID_PARAM"
 
@@ -342,7 +342,7 @@ def test_detail_returns_envelope_with_customer(settings_env, token_store):
         return httpx.Response(200, json={"Customer": _customer("42")})
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers/42")
+    resp = client.get("/v1/customers/42")
     assert resp.status_code == 200
     body = resp.json()
     assert body["data"]["Id"] == "42"
@@ -370,7 +370,7 @@ def test_detail_unknown_id_returns_404_with_envelope(settings_env, token_store):
         )
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers/9999")
+    resp = client.get("/v1/customers/9999")
     assert resp.status_code == 404
     body = resp.json()
     assert body["error"]["code"] == "NOT_FOUND"
@@ -382,7 +382,7 @@ def test_detail_propagates_qbo_5xx_as_502(settings_env, token_store):
         return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
 
     client, _ = _make_client(token_store, handler)
-    resp = client.get("/customers/42")
+    resp = client.get("/v1/customers/42")
     assert resp.status_code == 502
     body = resp.json()
     assert body["error"]["code"] == "QBO_ERROR"
@@ -396,7 +396,7 @@ def test_unauthenticated_returns_503_envelope(settings_env, tmp_path):
         pytest.fail("QBO should never be hit without auth")
 
     client, _ = _make_client(empty_store, handler)
-    resp = client.get("/customers")
+    resp = client.get("/v1/customers")
     assert resp.status_code == 503
     body = resp.json()
     assert body["error"]["code"] == "NOT_AUTHENTICATED"

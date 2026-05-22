@@ -13,7 +13,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(admin_oauth.router)
-    app.include_router(customers.router)
+    # Data routes are /v1/-prefixed so a future shape change can ride alongside
+    # /v1 without a breaking client change. /healthz, /readyz, /admin/oauth/*
+    # stay unversioned — they're ops/admin surfaces, not data API.
+    app.include_router(customers.router, prefix="/v1")
     return app
 
 
