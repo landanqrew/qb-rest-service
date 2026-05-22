@@ -4,6 +4,14 @@ qb-service hosts its own OAuth handshake at `/admin/oauth/start` and
 `/admin/oauth/callback`. No CLI, no laptop browser callback, no manual
 Secret Manager edits in the normal case.
 
+> First time deploying to Cloud Run? Walk through
+> [`iam-setup.md`](iam-setup.md) first — it stands up the runtime
+> service account and the three Secret Manager secrets this doc
+> references (`mwl-qb-client-id`, `mwl-qb-client-secret`,
+> `mwl-qb-tokens`). Then `deploy/deploy.sh` builds and deploys the
+> service, and you come back here for step 1 (register the callback
+> URL) and step 3 (run the authorization flow).
+
 ## 1. Register the callback URL in the Intuit developer console
 
 Intuit will only redirect to a redirect URI that exactly matches one
@@ -79,4 +87,6 @@ backend, that means a new secret version is added.
 
 ## See also
 
+- [`iam-setup.md`](iam-setup.md) — runtime service account + Secret Manager bindings + Cloud Run invoker IAM.
+- [`cloud-run.yaml`](cloud-run.yaml) and [`deploy.sh`](deploy.sh) — deploy artifacts.
 - [`docs/qb-service-scope.md`](../docs/qb-service-scope.md) §7 (auth) and §8 (bootstrap/re-auth flow).
