@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -411,3 +412,287 @@ def test_unauthenticated_returns_503(settings_env, tmp_path):
     resp = client.get("/v1/invoices")
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- create endpoint ----------
+
+
+def _post_response(invoice: dict, status: int = 200) -> httpx.Response:
+    return httpx.Response(status, json={"Invoice": invoice, "time": "2026-02-15T10:00:00Z"})
+
+
+def _duplicate_doc_number_response() -> httpx.Response:
+    """Shape Intuit returns when DocNumber uniqueness is violated.
+
+    HTTP 400 with Fault.Error[].code=6240. The service maps this to HTTP 409
+    with our QBO_DUPLICATE_DOCNUMBER code so callers can dedupe on it.
+    """
+    return httpx.Response(
+        400,
+        json={
+            "Fault": {
+                "Error": [
+                    {
+                        "Message": "Duplicate Document Number Exists",
+                        "Detail": (
+                            "Duplicate Document Number Exists. "
+                            "Another customer transaction is already using this number."
+                        ),
+                        "code": "6240",
+                    }
+                ],
+                "type": "ValidationFault",
+            }
+        },
+    )
+
+
+def test_create_returns_201_with_invoice_envelope(settings_env, token_store):
+    """Acceptance: sandbox create returns 201 with invoice body."""
+    def handler(request):
+        assert request.method == "POST"
+        assert "/invoice" in str(request.url)
+        return _post_response(_invoice("99", DocNumber="26-02-0099"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["data"]["Id"] == "99"
+    assert body["data"]["DocNumber"] == "26-02-0099"
+
+
+def test_create_posts_customer_ref_and_doc_number_to_qbo(settings_env, token_store):
+    """Minimum required fields are mapped to QBO's CustomerRef + DocNumber."""
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["CustomerRef"] == {"value": "55"}
+        assert body["DocNumber"] == "26-02-0099"
+        # txn_date / memo / lines are absent — must not appear in the QBO body.
+        assert "TxnDate" not in body
+        assert "PrivateNote" not in body
+        assert "CustomerMemo" not in body
+        assert "Line" not in body
+        return _post_response(_invoice("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 201
+
+
+def test_create_with_empty_lines_omits_line_array(settings_env, token_store):
+    """Phase 3 of the Lab Intake flow creates the invoice empty; passing
+    `lines: []` must not send a `Line: []` to QBO (QBO rejects empty Line
+    arrays on Invoice create). An absent Line key is correct.
+    """
+    def handler(request):
+        body = json.loads(request.content)
+        assert "Line" not in body
+        return _post_response(_invoice("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099", "lines": []},
+    )
+    assert resp.status_code == 201
+
+
+def test_create_translates_lines_into_qbo_sales_item_shape(settings_env, token_store):
+    """Each input line maps to a SalesItemLineDetail with ItemRef/Qty/UnitPrice,
+    and the line's Amount is computed as qty * rate.
+    """
+    def handler(request):
+        body = json.loads(request.content)
+        assert len(body["Line"]) == 1
+        line = body["Line"][0]
+        assert line["DetailType"] == "SalesItemLineDetail"
+        assert line["Amount"] == 150.0  # 2 * 75
+        assert line["Description"] == "Coliform"
+        detail = line["SalesItemLineDetail"]
+        assert detail["ItemRef"] == {"value": "9"}
+        assert detail["Qty"] == 2
+        assert detail["UnitPrice"] == 75.0
+        return _post_response(_invoice_with_lines("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "lines": [
+                {
+                    "item_id": "9",
+                    "qty": 2,
+                    "rate": 75.0,
+                    "description": "Coliform",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 201
+
+
+def test_create_passes_optional_txn_date_and_memos(settings_env, token_store):
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["TxnDate"] == "2026-02-15"
+        assert body["PrivateNote"] == "internal note"
+        assert body["CustomerMemo"] == {"value": "thanks!"}
+        return _post_response(_invoice("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "txn_date": "2026-02-15",
+            "memo": "internal note",
+            "customer_memo": "thanks!",
+        },
+    )
+    assert resp.status_code == 201
+
+
+def test_create_duplicate_doc_number_returns_409(settings_env, token_store):
+    """Acceptance: Intuit error 6240 (Duplicate Document Number) → HTTP 409
+    with code QBO_DUPLICATE_DOCNUMBER. Lab Intake retries with the same
+    deterministic DocNumber, so 409 is the natural-dedup signal.
+    """
+    def handler(request):
+        return _duplicate_doc_number_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_DUPLICATE_DOCNUMBER"
+    # Message names the offending DocNumber so the caller can correlate.
+    assert "26-02-0099" in body["error"]["message"]
+    # QBO's own detail is preserved for debugging.
+    assert "qbo_detail" in body["error"]
+    assert "Duplicate Document Number" in body["error"]["qbo_detail"]
+
+
+def test_create_missing_required_field_returns_422(settings_env, token_store):
+    """Acceptance: missing required fields return 422."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    # doc_number is required.
+    resp = client.post("/v1/invoices", json={"customer_id": "55"})
+    assert resp.status_code == 422
+
+
+def test_create_unknown_body_field_returns_422(settings_env, token_store):
+    """Acceptance: unknown body fields return 422 (strict, extra=forbid).
+
+    The web app must hear about typos / misnamed fields loudly rather than
+    have them silently dropped on the floor.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "tnx_date": "2026-02-15",  # typo for txn_date
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_create_unknown_line_field_returns_422(settings_env, token_store):
+    """Strict validation applies to nested line objects too."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "lines": [
+                {
+                    "item_id": "9",
+                    "qty": 1,
+                    "rate": 75.0,
+                    "unit_price": 75.0,  # not in our schema
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_create_propagates_qbo_5xx_as_502(settings_env, token_store):
+    def handler(request):
+        return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_create_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+def test_create_non_duplicate_400_returns_502(settings_env, token_store):
+    """Defence in depth: a QBO 400 that is NOT the duplicate-DocNumber error
+    must not be misclassified as 409. We only specialize on code 6240.
+    """
+    def handler(request):
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Required param missing",
+                            "Detail": "Required param missing.",
+                            "code": "2020",
+                        }
+                    ]
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
