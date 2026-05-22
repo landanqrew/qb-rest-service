@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import pytest
@@ -144,35 +146,50 @@ def test_load_reads_from_latest_version_alias():
     assert request["name"].endswith("/versions/latest")
 
 
-def test_refresh_lock_is_asyncio_lock():
+def test_refresh_lock_is_threading_lock():
+    """Sync QBClient runs in FastAPI's threadpool, so `refresh_lock` must
+    be the threading flavour — `asyncio.Lock` would not serialize threads.
+    """
     store = _store(_fake_client_with_versions())
-    assert isinstance(store.refresh_lock, asyncio.Lock)
+    # `threading.Lock()` returns an instance of a private `_thread.lock`
+    # class, so checking by isinstance against `threading.Lock` does not
+    # work. Check the duck-typed surface instead.
+    lock = store.refresh_lock
+    assert hasattr(lock, "acquire") and hasattr(lock, "release")
+    assert hasattr(lock, "locked")
+    # asyncio.Lock would have `_loop` / `_waiters` and lack `locked()` in
+    # the form the production code uses; a sanity check that we did not
+    # regress to it.
+    import asyncio as _asyncio
+
+    assert not isinstance(lock, _asyncio.Lock)
 
 
-def test_refresh_lock_serializes_two_coroutines():
-    """Two coroutines holding refresh_lock must not overlap in the critical
-    section, simulating two concurrent refresh attempts that would otherwise
-    both hit Intuit and invalidate each other's refresh token.
+def test_refresh_lock_serializes_two_threads():
+    """Two threads holding refresh_lock must not overlap in the critical
+    section, simulating two concurrent refresh attempts that would
+    otherwise both hit Intuit and invalidate each other's refresh token.
     """
     store = _store(_fake_client_with_versions())
     overlap_observed = False
     active = 0
     max_active = 0
+    state_lock = threading.Lock()
 
-    async def critical():
+    def critical():
         nonlocal active, max_active, overlap_observed
-        async with store.refresh_lock:
-            active += 1
-            max_active = max(max_active, active)
-            if active > 1:
-                overlap_observed = True
-            await asyncio.sleep(0.01)
-            active -= 1
+        with store.refresh_lock:
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+                if active > 1:
+                    overlap_observed = True
+            time.sleep(0.01)
+            with state_lock:
+                active -= 1
 
-    async def run():
-        await asyncio.gather(critical(), critical(), critical())
-
-    asyncio.run(run())
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        list(ex.map(lambda _: critical(), range(3)))
 
     assert max_active == 1
     assert overlap_observed is False

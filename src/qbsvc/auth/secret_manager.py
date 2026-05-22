@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import json
+import threading
 from typing import Any
 
 from qbsvc.auth.tokens import TokenData
@@ -16,10 +16,13 @@ class SecretManagerTokenStore:
     versions, which preserves the recovery path if a rotated token is
     rejected by Intuit.
 
-    Exposes `refresh_lock` (an `asyncio.Lock`) so callers can serialize the
-    refresh path. Two concurrent refreshes against the same realm would
-    otherwise race: the first invalidates the refresh token Intuit issued,
-    and the second fails on a now-stale value.
+    Exposes `refresh_lock` (a `threading.Lock`) so the synchronous
+    `QBClient` refresh path can serialize concurrent refreshes. Two
+    concurrent refreshes against the same realm would otherwise race:
+    the first invalidates the refresh token Intuit issued, and the
+    second fails on a now-stale value. FastAPI runs sync route handlers
+    in a threadpool, so `threading.Lock` is the right primitive for the
+    current sync client.
     """
 
     def __init__(
@@ -38,16 +41,13 @@ class SecretManagerTokenStore:
         self._project = project_id
         self._secret = secret_name
         self._client = client
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     @property
-    def refresh_lock(self) -> asyncio.Lock:
-        """Lock callers should hold across the refresh-and-save unit.
-
-        Currently exposed but NOT yet acquired by the synchronous
-        `QBClient` refresh path — the wiring lands when the client moves
-        to async/await (tracked as a follow-up). The lock contract itself
-        is verified by `test_refresh_lock_serializes_two_coroutines`.
+    def refresh_lock(self) -> "threading.Lock":
+        """Lock the synchronous refresh path holds across load → refresh →
+        save. Memoized at the deps layer so every per-request QBClient
+        injection shares the same lock instance.
         """
         return self._lock
 
