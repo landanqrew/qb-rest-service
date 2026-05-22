@@ -28,10 +28,11 @@ def list_items(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
 ) -> JSONResponse:
+    active_clause = "Active = true" if active else "Active IN (true, false)"
     return list_entity(
         client,
         entity="Item",
-        active=active,
+        extra_filters=[active_clause],
         modified_since=modified_since,
         limit=limit,
         cursor=cursor,

@@ -28,10 +28,13 @@ def list_customers(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: Annotated[str | None, Query()] = None,
 ) -> JSONResponse:
+    # QBO's default SELECT * filters to Active=true; the explicit IN clause is
+    # the documented way to also include inactive rows when active=false.
+    active_clause = "Active = true" if active else "Active IN (true, false)"
     return list_entity(
         client,
         entity="Customer",
-        active=active,
+        extra_filters=[active_clause],
         modified_since=modified_since,
         limit=limit,
         cursor=cursor,

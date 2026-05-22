@@ -67,7 +67,7 @@ def list_entity(
     client: QBClient,
     *,
     entity: str,
-    active: bool,
+    extra_filters: list[str] | None = None,
     modified_since: str | None,
     limit: int,
     cursor: str | None,
@@ -76,6 +76,11 @@ def list_entity(
 
     Shared between every Phase 2 read endpoint so the cursor/filter/envelope
     contract stays uniform across customers, items, invoices, etc.
+
+    `extra_filters` is a list of caller-built WHERE clauses (e.g.
+    `["Active = true"]` or `["CustomerRef = '55'"]`). Callers are responsible
+    for validating any user input that ends up inside these clauses; this
+    helper trusts the strings it receives and interpolates them verbatim.
     """
     try:
         start = decode_cursor(cursor) if cursor else 1
@@ -92,17 +97,9 @@ def list_entity(
             400,
         )
 
-    where_clauses: list[str] = []
-    if active:
-        where_clauses.append("Active = true")
-    else:
-        # QBO's default SELECT * filters to Active=true; explicit IN clause
-        # is the documented way to surface inactive rows too.
-        where_clauses.append("Active IN (true, false)")
+    where_clauses: list[str] = list(extra_filters or [])
     if modified_since:
         where_clauses.append(f"MetaData.LastUpdatedTime > '{modified_since}'")
-
-    where = " AND ".join(where_clauses)
 
     # Fetch limit+1 to detect has_more without a second round-trip; trim
     # before returning so the page never exceeds the requested size.
@@ -111,8 +108,12 @@ def list_entity(
     # has_more=false even if a 1001st row exists. Callers needing exact
     # boundary detection should page with a smaller window.
     fetch_size = min(limit + 1, 1000)
+    # Entities like Invoice have no Active column, so callers can pass no
+    # filters at all — in that case skip WHERE entirely rather than emit
+    # `WHERE  STARTPOSITION ...` which QBO rejects as a syntax error.
+    where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     sql = (
-        f"SELECT * FROM {entity} WHERE {where} "
+        f"SELECT * FROM {entity}{where_sql} "
         f"STARTPOSITION {start} MAXRESULTS {fetch_size}"
     )
 
