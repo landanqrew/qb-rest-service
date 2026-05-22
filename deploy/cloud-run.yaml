@@ -1,0 +1,85 @@
+# Knative service manifest for qb-service on Cloud Run.
+#
+# Applied via `gcloud run services replace deploy/cloud-run.yaml` once the
+# substitutions below are filled in. `deploy/deploy.sh` is the easier
+# entrypoint for day-to-day deploys; this file is the declarative source
+# of truth for what a deployed revision looks like.
+#
+# Placeholders (substitute before applying):
+#   PROJECT_ID        — GCP project hosting Cloud Run + Secret Manager
+#   REGION            — Cloud Run region, e.g. us-central1
+#   IMAGE             — fully-qualified container image, e.g.
+#                       us-central1-docker.pkg.dev/PROJECT_ID/qb-service/qb-service:GIT_SHA
+#   SERVICE_URL       — the full https URL Cloud Run assigns the service
+#                       (e.g. https://qb-service-abc.a.run.app), substituted as-is
+#                       into the redirect URI below; must match byte-for-byte the
+#                       URI registered in the Intuit developer console
+#   REALM_ID          — Intuit realm (company) ID for Martin Water Labs
+#
+# Secret Manager secrets referenced (see deploy/iam-setup.md):
+#   mwl-qb-client-id      — Intuit OAuth client ID
+#   mwl-qb-client-secret  — Intuit OAuth client secret
+#   mwl-qb-tokens         — rotated refresh+access token blob (managed by
+#                            SecretManagerTokenStore at runtime)
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: qb-service
+  annotations:
+    run.googleapis.com/launch-stage: GA
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      serviceAccountName: qb-service-runtime@PROJECT_ID.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 60
+      containers:
+        - name: qb-service
+          image: IMAGE
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: QBSVC_TOKEN_BACKEND
+              value: secret_manager
+            - name: QBSVC_GCP_PROJECT
+              value: PROJECT_ID
+            - name: QBSVC_REALM_ID
+              value: REALM_ID
+            - name: QBSVC_OAUTH_REDIRECT_URI
+              value: SERVICE_URL/admin/oauth/callback
+            - name: QBSVC_SECRET_NAME_TOKENS
+              value: mwl-qb-tokens
+            - name: QBSVC_INTUIT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mwl-qb-client-id
+                  key: latest
+            - name: QBSVC_INTUIT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mwl-qb-client-secret
+                  key: latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            timeoutSeconds: 4
+            periodSeconds: 4
+            failureThreshold: 10
+  traffic:
+    - latestRevision: true
+      percent: 100
