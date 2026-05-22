@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from qbsvc.routes import admin_oauth, health
+from qbsvc.routes import admin_oauth, customers, health
 
 
 def create_app() -> FastAPI:
@@ -13,6 +13,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(admin_oauth.router)
+    app.include_router(customers.router)
     return app
 
 
