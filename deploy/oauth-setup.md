@@ -46,6 +46,7 @@ Set on the qb-service deployment (Cloud Run env vars, `.env` locally):
 | `QBSVC_OAUTH_REDIRECT_URI`    | `https://<qb-service-domain>/admin/oauth/callback`      | **Must match** the URL registered in the Intuit console, byte-for-byte. |
 | `QBSVC_OAUTH_STATE_TTL_SECONDS` | `600` (default)                                       | How long a CSRF state token stays valid between `/start` and `/callback`. |
 | `QBSVC_TOKEN_BACKEND`         | `file` (dev) or `secret_manager` (prod)                 | Where the rotated refresh token is persisted.                        |
+| `QBSVC_ADMIN_ALLOWLIST`       | `you@example.com,backup-admin@example.com`              | Comma-separated emails allowed to reach `/admin/*`. **Required in prod** (see "Admin gate" below). Empty disables the gate (local dev). |
 
 ## 3. Run the authorization flow
 
@@ -75,6 +76,63 @@ Any time the refresh token is invalidated (scope change, manual revoke,
 new refresh token overwrites the stored one — for the Secret Manager
 backend, that means a new secret version is added.
 
+## Admin gate (issue #13)
+
+`/admin/oauth/*` is operator-only — the Lab Intake web app's runtime service
+account must **not** be able to call it, because doing so could pivot the
+service onto a different Intuit realm or invalidate the refresh token.
+
+Cloud Run IAM is service-level, not path-level: both the admin user and the
+web app's service account hold `roles/run.invoker` on the deployed service
+and can therefore reach every URL. We close the gap with an application-layer
+middleware (`qbsvc.auth.admin_gate.AdminGateMiddleware`) that 403s any
+`/admin/*` request whose caller email isn't on `QBSVC_ADMIN_ALLOWLIST`.
+
+### How identity is determined
+
+Cloud Run validates the caller's OIDC ID token at the edge (signature,
+expiry, audience) before the request reaches the container, then forwards
+the JWT unchanged as `Authorization: Bearer …`. The middleware decodes the
+JWT payload (no second signature check — see the module docstring for why)
+and reads the `email` claim:
+
+- Google user identities expose their email directly.
+- Service-account ID tokens carry the SA email as the `email` claim.
+
+The allowlist is matched case-insensitively. Anything not on the list — or
+any request missing/with-an-unparseable JWT — gets 403 with the standard
+error envelope.
+
+### Configuration
+
+Set `QBSVC_ADMIN_ALLOWLIST` to a comma-separated list of emails:
+
+```
+QBSVC_ADMIN_ALLOWLIST=you@example.com,backup-admin@example.com
+```
+
+If the env var is unset or empty the gate is **OFF**. That's the right
+default for local dev (no Cloud Run, no JWT to inspect) but means
+**production deployments must set it**. `deploy/cloud-run.yaml` includes a
+placeholder you fill in before applying.
+
+### Decision (rejected option)
+
+The alternative — two Cloud Run services sharing the same image, one for
+admin (`qb-admin..run.app`, admin-only IAM) and one for data
+(`qb..run.app`, web-app-SA-only IAM) — gives GCP-native IAM isolation, but
+doesn't actually close the gap on its own. The web-app SA, having invoker
+on the data service, can still reach `/admin/*` on the data service URL
+because the same image hosts those routes. Closing that requires either
+(a) an env flag on the data service to disable the admin routes — which is
+just this middleware in a different shape — or (b) maintaining two
+container images, which adds CI complexity.
+
+The in-app middleware keeps one Cloud Run service, one image, one URL, and
+puts the admin/data separation in one auditable place. If we ever need
+stronger blast-radius isolation (e.g. the admin surface grows beyond OAuth
+bootstrap), the two-service split is still available as a follow-up.
+
 ## Troubleshooting
 
 | Symptom                                         | Likely cause                                                                                  |
@@ -84,6 +142,7 @@ backend, that means a new secret version is added.
 | `502 Token exchange failed: …invalid_grant…`    | The `redirect_uri` configured here doesn't match the one registered in the Intuit console.    |
 | `500 OAuth not configured`                      | `QBSVC_INTUIT_CLIENT_ID`, `QBSVC_INTUIT_CLIENT_SECRET`, or `QBSVC_OAUTH_REDIRECT_URI` is missing from the environment. |
 | `500 Tokens exchanged but FAILED TO SAVE: …`    | Intuit issued a new refresh token but the configured `TokenStore` rejected the write (e.g. Secret Manager outage / IAM). The new token is lost — re-run `/admin/oauth/start` once the backend is reachable. |
+| `403 ADMIN_FORBIDDEN` from `/admin/oauth/*`     | Caller's email isn't on `QBSVC_ADMIN_ALLOWLIST` (or the env var is missing in prod). Add the identity to the allowlist and redeploy. Local-dev surprise: setting `QBSVC_ADMIN_ALLOWLIST` without supplying a bearer token will also 403. |
 
 ## See also
 

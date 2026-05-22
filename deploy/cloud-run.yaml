@@ -15,6 +15,9 @@
 #                       into the redirect URI below; must match byte-for-byte the
 #                       URI registered in the Intuit developer console
 #   REALM_ID          — Intuit realm (company) ID for Martin Water Labs
+#   ADMIN_ALLOWLIST   — comma-separated emails allowed to reach /admin/*
+#                       (issue #13 gate; see deploy/oauth-setup.md §"Admin gate").
+#                       Must include the operator identity that bootstraps OAuth.
 #
 # Secret Manager secrets referenced (see deploy/iam-setup.md):
 #   mwl-qb-client-id      — Intuit OAuth client ID
@@ -59,6 +62,8 @@ spec:
               value: SERVICE_URL/admin/oauth/callback
             - name: QBSVC_SECRET_NAME_TOKENS
               value: mwl-qb-tokens
+            - name: QBSVC_ADMIN_ALLOWLIST
+              value: ADMIN_ALLOWLIST
             - name: QBSVC_INTUIT_CLIENT_ID
               valueFrom:
                 secretKeyRef:

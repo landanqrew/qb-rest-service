@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from qbsvc.auth.admin_gate import AdminGateMiddleware
 from qbsvc.errors import register_exception_handlers
 from qbsvc.logging import configure_logging
 from qbsvc.middleware import RequestIDMiddleware
@@ -16,8 +17,13 @@ def create_app() -> FastAPI:
         description="Thin REST proxy in front of QuickBooks Online for the Martin Water Labs Lab Intake app.",
         version="0.1.0",
     )
-    # X-Request-ID first so every log line and error envelope downstream
-    # carries the same correlation id.
+    # Middleware stack (outermost → innermost):
+    #   RequestIDMiddleware  → AdminGateMiddleware  → routes
+    # Starlette runs middleware in reverse-add order, so the gate is added
+    # first (inner) and RequestID is added last (outer). That way a 403 from
+    # the gate flows back out through RequestID and picks up the X-Request-ID
+    # header callers use to correlate the rejection in logs.
+    app.add_middleware(AdminGateMiddleware)
     app.add_middleware(RequestIDMiddleware)
     register_exception_handlers(app)
 
