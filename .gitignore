@@ -206,5 +206,5 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Claude Code project-level config (personal)
-.claude/
+.claude/worktrees/
+.claude/settings.local.json
