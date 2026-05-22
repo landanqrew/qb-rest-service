@@ -30,3 +30,14 @@ class RateLimitError(QBError):
 
 class PaginationError(QBError):
     """Error during offset-based pagination."""
+
+
+class TokenStoreError(QBError):
+    """The underlying token-store backend failed (e.g., GCP API error).
+
+    Distinct from `AuthError`: this signals an operational/config problem
+    with the storage layer itself, not an authentication outcome. The most
+    important case is `save()` failing after Intuit has already rotated the
+    refresh token — the rotated value is then lost and must be loudly
+    surfaced rather than silently retried.
+    """

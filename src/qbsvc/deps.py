@@ -27,10 +27,13 @@ def _secret_manager_token_store(
     )
 
 
+@lru_cache(maxsize=1)
 def _build_secret_manager_client() -> Any:
-    """Construct a real Secret Manager client.
+    """Construct the process-wide Secret Manager client.
 
-    Split out so tests can patch it without importing google-cloud-secret-manager.
+    Split out (and memoized) so tests can patch it without importing
+    google-cloud-secret-manager, and so we never construct more than one
+    client per process.
     """
     from google.cloud import secretmanager
 
@@ -41,6 +44,7 @@ def reset_token_store_cache() -> None:
     """Clear memoized token-store instances. For tests only."""
     _file_token_store.cache_clear()
     _secret_manager_token_store.cache_clear()
+    _build_secret_manager_client.cache_clear()
 
 
 def get_token_store(settings: Settings = Depends(get_settings)) -> TokenStore:

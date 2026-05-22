@@ -9,6 +9,7 @@ from google.api_core import exceptions as gax_exc
 
 from qbsvc.auth.secret_manager import SecretManagerTokenStore
 from qbsvc.auth.tokens import TokenData, TokenStore
+from qbsvc.exceptions import TokenStoreError
 
 
 def _sample() -> TokenData:
@@ -177,6 +178,42 @@ def test_refresh_lock_serializes_two_coroutines():
     assert overlap_observed is False
 
 
-def test_refresh_lock_is_shared_across_calls():
-    store = _store(_fake_client_with_versions())
-    assert store.refresh_lock is store.refresh_lock
+def test_load_raises_token_store_error_on_permission_denied():
+    """IAM misconfig (the most likely first-run failure on Cloud Run) must
+    surface as a clear domain error, not an unhandled GoogleAPICallError.
+    Silently returning None would mask the bug and lead operators into a
+    futile re-auth flow.
+    """
+    client = MagicMock()
+    client.access_secret_version.side_effect = gax_exc.PermissionDenied("nope")
+    with pytest.raises(TokenStoreError, match="Permission denied"):
+        _store(client).load()
+
+
+def test_save_raises_token_store_error_when_gcp_call_fails():
+    """If add_secret_version fails after Intuit has rotated the refresh
+    token, the rotated value is irretrievably lost. Surface loudly.
+    """
+    client = MagicMock()
+    client.add_secret_version.side_effect = gax_exc.ServiceUnavailable("503")
+    with pytest.raises(TokenStoreError, match="Failed to persist rotated token"):
+        _store(client).save(_sample())
+
+
+def test_save_preserves_original_gcp_exception_as_cause():
+    client = MagicMock()
+    underlying = gax_exc.PermissionDenied("denied")
+    client.add_secret_version.side_effect = underlying
+    with pytest.raises(TokenStoreError) as excinfo:
+        _store(client).save(_sample())
+    assert excinfo.value.__cause__ is underlying
+
+
+def test_constructor_rejects_missing_required_args():
+    client = MagicMock()
+    with pytest.raises(ValueError, match="project_id"):
+        SecretManagerTokenStore(project_id="", secret_name="s", client=client)
+    with pytest.raises(ValueError, match="secret_name"):
+        SecretManagerTokenStore(project_id="p", secret_name="", client=client)
+    with pytest.raises(ValueError, match="client"):
+        SecretManagerTokenStore(project_id="p", secret_name="s", client=None)

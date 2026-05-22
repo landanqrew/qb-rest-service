@@ -41,7 +41,9 @@ def test_secret_manager_backend_selected_via_env(monkeypatch):
 
 
 def test_secret_manager_backend_is_memoized():
-    """One instance per process so the asyncio.Lock actually serializes."""
+    """One instance per process so the asyncio.Lock actually serializes
+    across two FastAPI dependency injections of the same store.
+    """
     with patch("qbsvc.deps._build_secret_manager_client", return_value=object()):
         settings = Settings(
             token_backend="secret_manager",
@@ -51,6 +53,9 @@ def test_secret_manager_backend_is_memoized():
         first = get_token_store(settings=settings)
         second = get_token_store(settings=settings)
     assert first is second
+    # Explicit: the lock is shared too. Regression-guards a future refactor
+    # that returns fresh store instances and silently breaks serialization.
+    assert first.refresh_lock is second.refresh_lock
 
 
 def test_secret_manager_backend_requires_gcp_project():
