@@ -74,7 +74,8 @@ backend, that means a new secret version is added.
 | `400 State mismatch — possible CSRF or expired request.` | The browser used a stale `/start` link (older than `QBSVC_OAUTH_STATE_TTL_SECONDS`), or the service restarted between `/start` and `/callback`. Click the link from `/start` again. |
 | `400 Authorization failed: access_denied`       | You clicked **Cancel** on the Intuit consent screen.                                          |
 | `502 Token exchange failed: …invalid_grant…`    | The `redirect_uri` configured here doesn't match the one registered in the Intuit console.    |
-| `500 OAuth not configured`                      | `QBSVC_INTUIT_CLIENT_ID` or `QBSVC_OAUTH_REDIRECT_URI` is missing from the environment.       |
+| `500 OAuth not configured`                      | `QBSVC_INTUIT_CLIENT_ID`, `QBSVC_INTUIT_CLIENT_SECRET`, or `QBSVC_OAUTH_REDIRECT_URI` is missing from the environment. |
+| `500 Tokens exchanged but FAILED TO SAVE: …`    | Intuit issued a new refresh token but the configured `TokenStore` rejected the write (e.g. Secret Manager outage / IAM). The new token is lost — re-run `/admin/oauth/start` once the backend is reachable. |
 
 ## See also
 
