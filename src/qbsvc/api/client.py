@@ -14,7 +14,14 @@ MINOR_VERSION = "75"
 
 
 class QBClient:
-    """Synchronous REST client for QuickBooks Online with auth and rate-limit handling."""
+    """Synchronous REST client for QuickBooks Online with auth and rate-limit handling.
+
+    Sync-with-threadpool over async on purpose: the QBO surface is one outbound
+    call per inbound request, the existing oauth.refresh path is sync, and
+    FastAPI already runs sync dependencies in a threadpool. Going async would
+    fork httpx into Client/AsyncClient pairs across the auth module for no
+    win in throughput here.
+    """
 
     def __init__(self, token_store: TokenStore, settings: Settings | None = None):
         self._store = token_store
@@ -50,6 +57,15 @@ class QBClient:
                 return value
 
         return []
+
+    def ensure_ready(self) -> None:
+        """Verify auth is usable: load tokens and refresh if expired.
+
+        Makes at most one call to Intuit's token endpoint; never touches a
+        QBO entity endpoint. Used by /readyz so that readiness reflects the
+        auth path the next real request would take.
+        """
+        self._ensure_tokens()
 
     def close(self):
         self._http.close()
