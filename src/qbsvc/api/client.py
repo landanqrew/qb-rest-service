@@ -212,15 +212,25 @@ class QBClient:
             return new_tokens
 
     def _raise_api_error(self, resp: httpx.Response) -> None:
+        # Keep the parsed body on the exception so callers can inspect Fault
+        # codes (e.g. 6240 for duplicate DocNumber) without re-parsing or
+        # losing structure to the flattened `detail` string.
+        body: dict | None = None
         try:
-            body = resp.json()
+            parsed = resp.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            body = None
+
+        if body is not None:
             fault = body.get("Fault", {})
             errors = fault.get("Error", [])
             detail = "; ".join(e.get("Detail", e.get("Message", str(e))) for e in errors)
-        except Exception:
+        else:
             detail = resp.text
 
-        raise APIError(resp.status_code, detail)
+        raise APIError(resp.status_code, detail, raw=body)
 
 
 _FROM_ENTITY_RE = re.compile(r"\bFROM\s+([A-Za-z]\w*)", re.IGNORECASE)
