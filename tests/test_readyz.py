@@ -50,7 +50,9 @@ def _seed_expired_token(store: FileTokenStore) -> None:
             access_token="stale-access",
             refresh_token="stale-refresh",
             realm_id="realm-123",
-            expires_at=time.time() - 60,
+            # Unambiguously past the 60s is_expired buffer — avoids any
+            # clock-skew flakiness from sitting at the boundary.
+            expires_at=time.time() - 3600,
         )
     )
 
@@ -162,6 +164,52 @@ def test_readyz_does_not_make_qbo_entity_request(
     assert resp.status_code == 200
     # Only Intuit's token endpoint was hit.
     assert all("oauth.platform.intuit.com" in c for c in calls)
+
+
+def test_readyz_returns_503_when_token_store_save_fails(
+    settings_env, token_store, monkeypatch
+):
+    """Intuit refresh succeeded but the rotated token can't be persisted —
+    must surface 503 with TOKEN_STORE_FAILED, not leak a 500."""
+    from qbsvc.exceptions import TokenStoreError
+
+    _seed_expired_token(token_store)
+    _patch_token_refresh(monkeypatch, success=True)
+
+    def boom(_tokens):
+        raise TokenStoreError("Secret Manager unreachable: 503")
+
+    monkeypatch.setattr(token_store, "save", boom)
+
+    client = _make_client(token_store)
+    resp = client.get("/readyz")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["error"]["code"] == "TOKEN_STORE_FAILED"
+    assert "secret manager" in body["error"]["message"].lower()
+
+
+def test_readyz_error_code_uses_typed_exception_not_message_match(
+    settings_env, token_store, monkeypatch
+):
+    """Regression guard against fragile string-matching on AuthError.message.
+    The error code must come from the exception type, not the message text.
+    """
+    from qbsvc.exceptions import NotAuthenticatedError
+
+    # No token in store → ensure_ready raises NotAuthenticatedError, whose
+    # .code drives the response — even if we mutate the message wording.
+    original_load = token_store.load
+
+    def load_then_raise():
+        # Trick: force the raise path with a totally different message.
+        return None
+
+    monkeypatch.setattr(token_store, "load", load_then_raise)
+    client = _make_client(token_store)
+    resp = client.get("/readyz")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == NotAuthenticatedError.code
 
 
 def test_readyz_dependency_uses_get_qb_client():

@@ -11,7 +11,7 @@ import httpx
 
 from qbsvc.auth.tokens import TokenData, TokenStore
 from qbsvc.config import Settings
-from qbsvc.exceptions import AuthError
+from qbsvc.exceptions import AuthError, TokenRefreshError
 
 AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -163,7 +163,9 @@ def refresh(
     )
 
     if resp.status_code != 200:
-        raise AuthError(f"Token refresh failed ({resp.status_code}): {resp.text}")
+        raise TokenRefreshError(
+            f"Token refresh failed ({resp.status_code}): {resp.text}"
+        )
 
     tokens = _parse_token_response(resp.json(), realm_id)
     store.save(tokens)

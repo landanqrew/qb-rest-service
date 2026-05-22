@@ -7,7 +7,7 @@ import httpx
 from qbsvc.auth.oauth import refresh as oauth_refresh
 from qbsvc.auth.tokens import TokenData, TokenStore
 from qbsvc.config import Settings, get_settings
-from qbsvc.exceptions import APIError, AuthError, RateLimitError
+from qbsvc.exceptions import APIError, AuthError, NotAuthenticatedError, RateLimitError
 
 BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
 MINOR_VERSION = "75"
@@ -113,7 +113,7 @@ class QBClient:
             self._tokens = self._store.load()
 
         if self._tokens is None:
-            raise AuthError(
+            raise NotAuthenticatedError(
                 "Not authenticated. Run the OAuth flow at /admin/oauth/start."
             )
 

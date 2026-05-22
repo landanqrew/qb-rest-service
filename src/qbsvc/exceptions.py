@@ -9,6 +9,23 @@ class ConfigError(QBError):
 class AuthError(QBError):
     """Authentication or token errors."""
 
+    # Stable identifier surfaced in /readyz and error envelopes. Subclasses
+    # override to give callers a fixed signal that doesn't drift with the
+    # human-readable message.
+    code: str = "AUTH_ERROR"
+
+
+class NotAuthenticatedError(AuthError):
+    """No tokens in the store — OAuth flow has never been completed."""
+
+    code = "NOT_AUTHENTICATED"
+
+
+class TokenRefreshError(AuthError):
+    """Refresh exchange with Intuit failed (network, invalid_grant, etc.)."""
+
+    code = "TOKEN_REFRESH_FAILED"
+
 
 class TokenExpiredError(AuthError):
     """Token has expired and refresh failed."""
