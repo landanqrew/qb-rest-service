@@ -148,9 +148,11 @@ gcloud run services add-iam-policy-binding "${SERVICE}" \
 ```
 
 > Cloud Run IAM is service-level, not path-level — so the web app's SA
-> currently *can* reach `/admin/oauth/*`. Issue #13 tracks the
-> admin-vs-caller split (either two Cloud Run services, or in-app
-> middleware enforcing an admin allowlist).
+> would otherwise be able to reach `/admin/oauth/*` too. The
+> `AdminGateMiddleware` (issue #13) enforces the split inside the app via
+> `QBSVC_ADMIN_ALLOWLIST`. Make sure the env var includes the admin
+> identity bound here; the web-app SA must **not** be on it. See
+> [`oauth-setup.md`](oauth-setup.md) §"Admin gate".
 
 ## 8. Verify
 

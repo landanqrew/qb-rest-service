@@ -12,6 +12,10 @@
 #   REALM_ID          Intuit realm (company) ID for Martin Water Labs
 #   RUNTIME_SA        Runtime service account email (default:
 #                       qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com)
+#   ADMIN_ALLOWLIST   Comma-separated emails permitted to call /admin/* (issue #13).
+#                       Must include the operator who bootstraps OAuth; must NOT
+#                       include the web app's runtime SA. See
+#                       deploy/oauth-setup.md §"Admin gate".
 #
 # Prerequisites (see deploy/iam-setup.md):
 #   - Artifact Registry repo ${AR_REPO} exists in ${REGION}
@@ -27,6 +31,7 @@ set -euo pipefail
 
 GCP_PROJECT="${GCP_PROJECT:?GCP_PROJECT is required}"
 REALM_ID="${REALM_ID:?REALM_ID is required}"
+ADMIN_ALLOWLIST="${ADMIN_ALLOWLIST:?ADMIN_ALLOWLIST is required (comma-separated admin emails; see deploy/oauth-setup.md)}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-qb-service}"
 AR_REPO="${AR_REPO:-qb-service}"
@@ -64,7 +69,10 @@ DEPLOY_ARGS=(
   --timeout=60
   --port=8080
   --execution-environment=gen2
-  --set-env-vars="QBSVC_TOKEN_BACKEND=secret_manager,QBSVC_GCP_PROJECT=${GCP_PROJECT},QBSVC_REALM_ID=${REALM_ID},QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens"
+  # ADMIN_ALLOWLIST is exported with `^|^` as the delimiter so the comma-
+  # separated email list can pass through `--set-env-vars` without being
+  # mis-parsed as multiple env vars.
+  "--set-env-vars=^|^QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_ADMIN_ALLOWLIST=${ADMIN_ALLOWLIST}"
   --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest"
 )
 
