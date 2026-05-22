@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from qbsvc.routes import admin_oauth, health
+from qbsvc.routes import admin_oauth, customers, health
 
 
 def create_app() -> FastAPI:
@@ -13,6 +13,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(admin_oauth.router)
+    # Data routes are /v1/-prefixed so a future shape change can ride alongside
+    # /v1 without a breaking client change. /healthz, /readyz, /admin/oauth/*
+    # stay unversioned — they're ops/admin surfaces, not data API.
+    app.include_router(customers.router, prefix="/v1")
     return app
 
 

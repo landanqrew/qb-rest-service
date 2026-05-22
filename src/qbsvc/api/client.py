@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
@@ -49,13 +50,23 @@ class QBClient:
     def query(self, sql: str) -> list[dict]:
         """Execute a QBO SQL-like query and return the list of entities."""
         resp = self._request("GET", "query", params={"query": sql})
-
         query_response = resp.get("QueryResponse", {})
 
-        for value in query_response.values():
-            if isinstance(value, list):
-                return value
+        # Look up the entity by the name parsed from `FROM <Entity>` rather
+        # than returning whatever list appears first in QueryResponse —
+        # protects callers if QBO ever surfaces a sibling list (warnings,
+        # etc.) in front of the entity rows.
+        entity = _parse_from_entity(sql)
+        if entity is None:
+            return []
 
+        # QBO response keys are always PascalCase (e.g. "Customer"). Match
+        # case-insensitively so a lowercase `from customer` in the SQL still
+        # resolves to the right list instead of silently returning [].
+        target = entity.lower()
+        for key, value in query_response.items():
+            if key.lower() == target and isinstance(value, list):
+                return value
         return []
 
     def ensure_ready(self) -> None:
@@ -144,3 +155,14 @@ class QBClient:
             detail = resp.text
 
         raise APIError(resp.status_code, detail)
+
+
+_FROM_ENTITY_RE = re.compile(r"\bFROM\s+([A-Za-z]\w*)", re.IGNORECASE)
+
+
+def _parse_from_entity(sql: str) -> str | None:
+    """Pull the entity name out of `... FROM <Entity> ...`. Whitespace/case
+    tolerant. Returns None if no FROM clause can be located so callers can
+    fall back to an empty result rather than raise."""
+    match = _FROM_ENTITY_RE.search(sql)
+    return match.group(1) if match else None
