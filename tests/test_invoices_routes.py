@@ -1131,6 +1131,29 @@ def test_append_line_unauthenticated_returns_503(settings_env, tmp_path):
     assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
 
 
+def test_append_line_partial_invoice_body_returns_502(settings_env, token_store):
+    """Defence in depth: if QBO returns a 200 with an Invoice object missing
+    Id or SyncToken (beta-API quirk / partial response), the route must emit
+    a clean 502 rather than crash with a KeyError into an unhandled 500.
+    """
+    def handler(request):
+        assert request.method == "GET"  # POST must not fire without a SyncToken
+        return httpx.Response(
+            200,
+            json={"Invoice": {"DocNumber": "26-02-0042"}},  # no Id, no SyncToken
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_ERROR"
+    assert "Id" in body["error"]["message"] or "SyncToken" in body["error"]["message"]
+
+
 def test_append_line_invoice_with_no_existing_lines_works(settings_env, token_store):
     """An empty invoice (created via POST /invoices with no lines) must
     support the first append — Line key absent → treat as empty list.

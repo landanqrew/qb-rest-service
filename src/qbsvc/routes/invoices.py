@@ -15,6 +15,7 @@ from qbsvc.routes._common import (
     MAX_PAGE_SIZE,
     error_response,
     get_entity_detail,
+    is_not_found,
     list_entity,
 )
 from qbsvc.schemas import DetailResponse
@@ -331,9 +332,7 @@ def append_invoice_line(
     except RateLimitError as exc:
         return error_response("RATE_LIMITED", str(exc), 429)
     except APIError as exc:
-        if exc.status_code == 404 or (
-            exc.status_code == 400 and "object not found" in exc.detail.lower()
-        ):
+        if is_not_found(exc):
             return error_response(
                 "NOT_FOUND",
                 f"Invoice {invoice_id} not found",
@@ -346,11 +345,23 @@ def append_invoice_line(
     if invoice is None:
         return error_response("NOT_FOUND", f"Invoice {invoice_id} not found", 404)
 
+    # Guard against a 200 with a partial Invoice body — QBO has shipped
+    # beta-API quirks where optional fields drop out, and bare subscripts
+    # below would surface as an unhandled 500 instead of the envelope.
+    invoice_id_val = invoice.get("Id")
+    sync_token_val = invoice.get("SyncToken")
+    if invoice_id_val is None or sync_token_val is None:
+        return error_response(
+            "QBO_ERROR",
+            "QBO returned an invoice with a missing Id or SyncToken",
+            502,
+        )
+
     existing_lines = invoice.get("Line") or []
     new_lines = _strip_subtotal_lines(existing_lines) + [_append_line_to_qbo(payload)]
     sparse_body: dict[str, Any] = {
-        "Id": invoice["Id"],
-        "SyncToken": invoice["SyncToken"],
+        "Id": invoice_id_val,
+        "SyncToken": sync_token_val,
         "sparse": True,
         "Line": new_lines,
     }
