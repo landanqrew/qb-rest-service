@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -12,6 +13,8 @@ from qbsvc.exceptions import APIError, AuthError, NotAuthenticatedError, RateLim
 
 BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
 MINOR_VERSION = "75"
+
+_log = logging.getLogger("qbsvc.qbo")
 
 
 class QBClient:
@@ -99,24 +102,64 @@ class QBClient:
             "Accept": "application/json",
         }
 
+        start = time.perf_counter()
+        retries = 0
         resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
 
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
             time.sleep(retry_after)
+            retries += 1
             resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
             if resp.status_code == 429:
+                self._log_call(
+                    method, endpoint, resp.status_code, start, tokens.realm_id, retries
+                )
                 raise RateLimitError("Rate limited after retry. Try again later.")
 
         if resp.status_code == 401:
-            tokens = self._refresh_tokens()
+            try:
+                tokens = self._refresh_tokens()
+            except Exception:
+                # Capture the original 401 in the structured log even when
+                # the refresh exchange itself blows up — otherwise the QBO
+                # call goes missing from observability while the auth log
+                # records the refresh failure separately.
+                self._log_call(
+                    method, endpoint, 401, start, tokens.realm_id, retries
+                )
+                raise
             headers["Authorization"] = f"Bearer {tokens.access_token}"
+            retries += 1
             resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
+
+        self._log_call(method, endpoint, resp.status_code, start, tokens.realm_id, retries)
 
         if resp.status_code >= 400:
             self._raise_api_error(resp)
 
         return resp.json()
+
+    @staticmethod
+    def _log_call(
+        method: str,
+        endpoint: str,
+        status: int,
+        start: float,
+        realm_id: str,
+        retries: int,
+    ) -> None:
+        _log.info(
+            "qbo_call",
+            extra={
+                "method": method,
+                "qbo_endpoint": endpoint,
+                "status": status,
+                "qbo_duration_ms": round((time.perf_counter() - start) * 1000, 2),
+                "realm_id": realm_id,
+                "retries": retries,
+            },
+        )
 
     def _ensure_tokens(self) -> TokenData:
         """Load tokens from the store, refreshing if expired."""
