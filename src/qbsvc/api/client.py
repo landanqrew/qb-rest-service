@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
@@ -49,14 +50,18 @@ class QBClient:
     def query(self, sql: str) -> list[dict]:
         """Execute a QBO SQL-like query and return the list of entities."""
         resp = self._request("GET", "query", params={"query": sql})
-
         query_response = resp.get("QueryResponse", {})
 
-        for value in query_response.values():
-            if isinstance(value, list):
-                return value
+        # Look up the entity by the name parsed from `FROM <Entity>` rather
+        # than returning whatever list appears first in QueryResponse —
+        # protects callers if QBO ever surfaces a sibling list (warnings,
+        # etc.) in front of the entity rows.
+        entity = _parse_from_entity(sql)
+        if entity is None:
+            return []
 
-        return []
+        rows = query_response.get(entity, [])
+        return rows if isinstance(rows, list) else []
 
     def ensure_ready(self) -> None:
         """Verify auth is usable: load tokens and refresh if expired.
@@ -144,3 +149,14 @@ class QBClient:
             detail = resp.text
 
         raise APIError(resp.status_code, detail)
+
+
+_FROM_ENTITY_RE = re.compile(r"\bFROM\s+([A-Za-z]\w*)", re.IGNORECASE)
+
+
+def _parse_from_entity(sql: str) -> str | None:
+    """Pull the entity name out of `... FROM <Entity> ...`. Whitespace/case
+    tolerant. Returns None if no FROM clause can be located so callers can
+    fall back to an empty result rather than raise."""
+    match = _FROM_ENTITY_RE.search(sql)
+    return match.group(1) if match else None

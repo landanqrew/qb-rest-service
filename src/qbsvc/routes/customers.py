@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -28,6 +30,20 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 # QBO MAXRESULTS hard limit is 1000; 100 matches the existing pagination helper default.
 MAX_PAGE_SIZE = 1000
 DEFAULT_PAGE_SIZE = 100
+
+# Strict YYYY-MM-DD only. date.fromisoformat() in 3.11+ also accepts ordinal
+# and basic-format dates which would make the SQL literal ambiguous and could
+# admit injection vectors through the looser shapes; pin the wire format here.
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_iso_date(value: str) -> date | None:
+    if not _ISO_DATE_RE.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _err(
@@ -67,6 +83,16 @@ def list_customers(
         start = decode_cursor(cursor) if cursor else 1
     except PaginationError as exc:
         return _err("INVALID_CURSOR", str(exc), 400)
+
+    if modified_since is not None and _parse_iso_date(modified_since) is None:
+        # Hard-fail anything that isn't strictly YYYY-MM-DD so the value can
+        # never carry a quote or other SQL-meaningful character into the
+        # query string below.
+        return _err(
+            "INVALID_PARAM",
+            "modified_since must be a calendar date in YYYY-MM-DD format",
+            400,
+        )
 
     where_clauses: list[str] = []
     if active:

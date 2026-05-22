@@ -286,6 +286,53 @@ def test_invalid_cursor_returns_400_with_error_envelope(settings_env, token_stor
     assert body["error"]["code"] == "INVALID_CURSOR"
 
 
+def test_malformed_modified_since_returns_400_without_hitting_qbo(
+    settings_env, token_store
+):
+    """Regression guard for SQL injection: anything not strictly YYYY-MM-DD
+    must be rejected before being interpolated into QBO SQL.
+    """
+
+    def handler(request):
+        pytest.fail("QBO must not be hit when modified_since is malformed")
+
+    client, _ = _make_client(token_store, handler)
+    # Classic injection attempt — closes the date literal, adds a tautology.
+    resp = client.get("/customers?modified_since=2026-01-01' OR 'x'='x")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "modified_since" in body["error"]["message"].lower()
+
+
+def test_modified_since_rejects_semantically_invalid_dates(settings_env, token_store):
+    """Feb 30 has the right shape but isn't a real date — reject up front
+    so callers see a clean 400 rather than an obscure QBO error.
+    """
+
+    def handler(request):
+        pytest.fail("QBO must not be hit for an invalid calendar date")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.get("/customers?modified_since=2026-02-30")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_PARAM"
+
+
+def test_modified_since_rejects_extended_iso_formats(settings_env, token_store):
+    """date.fromisoformat in 3.11+ accepts ordinal/week-date forms; we want
+    strict YYYY-MM-DD only so the SQL literal is unambiguous.
+    """
+
+    def handler(request):
+        pytest.fail("QBO must not be hit for non-YYYY-MM-DD inputs")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.get("/customers?modified_since=20260101")  # basic ISO, no dashes
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_PARAM"
+
+
 # ---------- detail endpoint ----------
 
 
