@@ -134,7 +134,11 @@ class QBClient:
         return self._tokens
 
     def _refresh_tokens(self) -> TokenData:
-        if self._tokens is None:
+        # Snapshot before the lock so the in-critical-section fallback
+        # below can never deref a None self._tokens (e.g., if some future
+        # code path nulls the cache while we're waiting for the lock).
+        cached = self._tokens
+        if cached is None:
             raise AuthError("No tokens to refresh.")
         # Serialize concurrent refreshes against the same store. Without
         # this, two FastAPI threads can both call Intuit, and the loser
@@ -151,9 +155,10 @@ class QBClient:
                 return stored
             # Pull the refresh token from the most-recent persisted copy.
             # If another process rotated it between our initial load and
-            # the lock acquisition, our cached `self._tokens.refresh_token`
-            # is already invalid.
-            source = stored or self._tokens
+            # the lock acquisition, our cached refresh_token is already
+            # invalid; prefer `stored` when present. `cached` is non-None
+            # (guarded above), so `source` is too.
+            source: TokenData = stored if stored is not None else cached
             new_tokens = oauth_refresh(
                 self._settings,
                 self._store,

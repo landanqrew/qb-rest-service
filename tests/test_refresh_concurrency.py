@@ -98,6 +98,11 @@ def test_two_concurrent_qbclient_refreshes_hit_intuit_once(
     monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", recorder)
 
     settings = Settings()
+    # Barrier ensures both threads reach _refresh_tokens simultaneously
+    # before either acquires the lock, so the test deterministically
+    # exercises the race — without it, a fast scheduler could let thread
+    # 1 finish before thread 2 even starts, masking a broken lock.
+    barrier = threading.Barrier(2)
 
     def worker() -> TokenData:
         client = QBClient(token_store=shared_store, settings=settings)
@@ -106,6 +111,7 @@ def test_two_concurrent_qbclient_refreshes_hit_intuit_once(
             # refresh, exactly as two fresh per-request QBClient instances
             # would in production.
             client._tokens = shared_store.load()
+            barrier.wait(timeout=5)
             return client._refresh_tokens()
         finally:
             client.close()
