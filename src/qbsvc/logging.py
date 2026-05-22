@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import threading
 from datetime import datetime, timezone
 
 from qbsvc.request_context import get_request_id
@@ -83,26 +84,29 @@ def _json_default(value: object) -> str:
 
 
 _CONFIGURED = False
+_CONFIGURE_LOCK = threading.Lock()
 
 
 def configure_logging(level: str = "INFO") -> None:
     """Install the JSON formatter on the root logger, writing to stdout.
 
-    Idempotent — calling more than once does not stack handlers, which would
-    cause every log line to be emitted N times.
+    Idempotent and thread-safe — concurrent first-time callers (e.g. multiple
+    worker threads racing to invoke create_app()) cannot both pass the
+    `_CONFIGURED` check, so handlers never stack and log lines never
+    duplicate.
     """
     global _CONFIGURED
     root = logging.getLogger()
     root.setLevel(level)
 
-    if _CONFIGURED:
-        return
-
-    handler = logging.StreamHandler(stream=sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    handler.set_name("qbsvc.json")
-    root.addHandler(handler)
-    _CONFIGURED = True
+    with _CONFIGURE_LOCK:
+        if _CONFIGURED:
+            return
+        handler = logging.StreamHandler(stream=sys.stdout)
+        handler.setFormatter(JsonFormatter())
+        handler.set_name("qbsvc.json")
+        root.addHandler(handler)
+        _CONFIGURED = True
 
 
 def reset_logging_for_tests() -> None:

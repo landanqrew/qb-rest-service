@@ -135,6 +135,36 @@ def test_qbo_log_emitted_even_when_request_fails(caplog, fresh_store, settings):
     assert qbo[-1].__dict__["status"] == 400
 
 
+def test_qbo_log_emitted_when_401_refresh_raises(
+    caplog, fresh_store, settings, monkeypatch
+):
+    """A 401 from QBO triggers a token refresh; if the refresh blows up, the
+    original 401 must still be logged so an operator can correlate the failed
+    QBO call to whatever happened in token-refresh logs.
+    """
+    from qbsvc.exceptions import TokenRefreshError
+
+    caplog.set_level(logging.INFO, logger="qbsvc.qbo")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"Fault": {"Error": [{"Message": "expired"}]}})
+
+    client = _client_with(httpx.MockTransport(handler), fresh_store, settings)
+
+    def boom(*_a, **_kw):
+        raise TokenRefreshError("invalid_grant")
+
+    monkeypatch.setattr(client, "_refresh_tokens", boom)
+
+    with pytest.raises(TokenRefreshError):
+        client.get("customer/1")
+
+    qbo = [r for r in caplog.records if r.name == "qbsvc.qbo"]
+    assert qbo, "401 attempt must be logged before the refresh raises"
+    assert qbo[-1].__dict__["status"] == 401
+    assert qbo[-1].__dict__["qbo_endpoint"] == "customer/1"
+
+
 @pytest.fixture(autouse=True)
 def _reset_logging():
     yield

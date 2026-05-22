@@ -118,7 +118,17 @@ class QBClient:
                 raise RateLimitError("Rate limited after retry. Try again later.")
 
         if resp.status_code == 401:
-            tokens = self._refresh_tokens()
+            try:
+                tokens = self._refresh_tokens()
+            except Exception:
+                # Capture the original 401 in the structured log even when
+                # the refresh exchange itself blows up — otherwise the QBO
+                # call goes missing from observability while the auth log
+                # records the refresh failure separately.
+                self._log_call(
+                    method, endpoint, 401, start, tokens.realm_id, retries
+                )
+                raise
             headers["Authorization"] = f"Bearer {tokens.access_token}"
             retries += 1
             resp = self._http.request(method, url, headers=headers, params=params, json=json_body)

@@ -136,6 +136,38 @@ def test_validation_error_returns_400_envelope(client):
     assert "message" in body["error"]
 
 
+def test_validation_error_message_concatenates_all_fields():
+    """When several fields fail at once the caller deserves to see all of
+    them in one round-trip instead of fixing them one at a time.
+    """
+    from fastapi import Query
+
+    app = FastAPI()
+    app.add_middleware(RequestIDMiddleware)
+    register_exception_handlers(app)
+
+    # Default-form annotations dodge the `from __future__ import annotations`
+    # forward-ref evaluation pitfall that bites `Annotated[...]` inside a
+    # closure-defined route.
+    @app.get("/multi")
+    def multi(
+        alpha: int = Query(ge=1),
+        beta: int = Query(ge=1),
+    ) -> dict:
+        return {"alpha": alpha, "beta": beta}
+
+    c = TestClient(app, raise_server_exceptions=False)
+    # Both query params violate ge=1 at the same time — handler must surface
+    # both, not just the first.
+    resp = c.get("/multi?alpha=0&beta=0")
+    assert resp.status_code == 400
+    message = resp.json()["error"]["message"]
+    assert "alpha" in message
+    assert "beta" in message
+    # Multiple errors joined with a separator (semicolon, per handler impl).
+    assert ";" in message
+
+
 def test_uncaught_exception_returns_500_envelope(client):
     resp = client.get("/uncaught")
     assert resp.status_code == 500
