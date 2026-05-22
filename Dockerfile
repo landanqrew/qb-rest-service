@@ -22,12 +22,13 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 
 # Resolve dependencies first (no project source yet) so layer caching survives
-# code-only changes.
-COPY pyproject.toml uv.lock README.md ./
+# code-only and docs-only changes.
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project --extra gcp
 
-# Install the project itself.
+# README.md is referenced by pyproject.toml; needed at project-install time.
+COPY README.md ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra gcp

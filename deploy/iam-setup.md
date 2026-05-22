@@ -40,7 +40,7 @@ gcloud artifacts repositories create "${AR_REPO}" \
   --repository-format=docker \
   --location="${REGION}" \
   --description="Container images for ${SERVICE}" \
-  --project="${GCP_PROJECT}"
+  --project="${GCP_PROJECT}" || true
 ```
 
 ## 3. Create the runtime service account
@@ -48,7 +48,7 @@ gcloud artifacts repositories create "${AR_REPO}" \
 ```bash
 gcloud iam service-accounts create qb-service-runtime \
   --display-name="qb-service runtime" \
-  --project="${GCP_PROJECT}"
+  --project="${GCP_PROJECT}" || true
 ```
 
 ## 4. Create the three secrets
@@ -58,25 +58,29 @@ credentials (one value per secret so Cloud Run can mount each into a
 separate env var). `mwl-qb-tokens` holds the rotated refresh+access
 token blob; the runtime writes a new version to it on every refresh.
 
+`gcloud secrets create` errors with `ALREADY_EXISTS` if you re-run it, so each
+`create` is guarded with `|| true`. The subsequent `versions add` calls always
+append a new version, so it's safe to re-run them to rotate a value.
+
 ```bash
 # Intuit client ID
 gcloud secrets create mwl-qb-client-id \
   --replication-policy=automatic \
-  --project="${GCP_PROJECT}"
+  --project="${GCP_PROJECT}" || true
 printf '%s' '<INTUIT_CLIENT_ID>' | gcloud secrets versions add mwl-qb-client-id \
   --data-file=- --project="${GCP_PROJECT}"
 
 # Intuit client secret
 gcloud secrets create mwl-qb-client-secret \
   --replication-policy=automatic \
-  --project="${GCP_PROJECT}"
+  --project="${GCP_PROJECT}" || true
 printf '%s' '<INTUIT_CLIENT_SECRET>' | gcloud secrets versions add mwl-qb-client-secret \
   --data-file=- --project="${GCP_PROJECT}"
 
 # Token blob (created empty; populated by /admin/oauth/callback on first auth)
 gcloud secrets create mwl-qb-tokens \
   --replication-policy=automatic \
-  --project="${GCP_PROJECT}"
+  --project="${GCP_PROJECT}" || true
 ```
 
 > **Note on naming.** The scope doc and issue #12 refer to the client

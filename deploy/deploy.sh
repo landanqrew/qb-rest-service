@@ -64,7 +64,7 @@ DEPLOY_ARGS=(
   --timeout=60
   --port=8080
   --execution-environment=gen2
-  --set-env-vars="QBSVC_TOKEN_BACKEND=secret_manager,QBSVC_GCP_PROJECT=${GCP_PROJECT},QBSVC_REALM_ID=${REALM_ID},QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens,QBSVC_SECRET_NAME_CLIENT=mwl-qb-client"
+  --set-env-vars="QBSVC_TOKEN_BACKEND=secret_manager,QBSVC_GCP_PROJECT=${GCP_PROJECT},QBSVC_REALM_ID=${REALM_ID},QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens"
   --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest"
 )
 
