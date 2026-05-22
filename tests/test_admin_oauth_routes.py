@@ -309,7 +309,14 @@ def test_callback_token_store_save_failure_returns_500(
     operator needs a loud, specific error — not a stack trace."""
     from qbsvc.exceptions import TokenStoreError
 
+    import threading
+
     class FailingTokenStore:
+        # refresh_lock is required by the TokenStore Protocol so that
+        # `isinstance(store, TokenStore)` still returns True for stubs —
+        # see qbsvc.auth.tokens.TokenStore.
+        refresh_lock = threading.Lock()
+
         def load(self):
             return None
 

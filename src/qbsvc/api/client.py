@@ -134,16 +134,39 @@ class QBClient:
         return self._tokens
 
     def _refresh_tokens(self) -> TokenData:
-        if self._tokens is None:
+        # Snapshot before the lock so the in-critical-section fallback
+        # below can never deref a None self._tokens (e.g., if some future
+        # code path nulls the cache while we're waiting for the lock).
+        cached = self._tokens
+        if cached is None:
             raise AuthError("No tokens to refresh.")
-        new_tokens = oauth_refresh(
-            self._settings,
-            self._store,
-            self._tokens.refresh_token,
-            self._tokens.realm_id,
-        )
-        self._tokens = new_tokens
-        return new_tokens
+        # Serialize concurrent refreshes against the same store. Without
+        # this, two FastAPI threads can both call Intuit, and the loser
+        # ends up with an invalidated refresh token (Intuit rotates on
+        # every successful refresh).
+        with self._store.refresh_lock:
+            # Another caller may have refreshed while we waited for the
+            # lock — check the store before hitting Intuit a second time.
+            # The acquire/release of threading.Lock provides the memory
+            # barrier needed to see the winner's save.
+            stored = self._store.load()
+            if stored is not None and not stored.is_expired:
+                self._tokens = stored
+                return stored
+            # Pull the refresh token from the most-recent persisted copy.
+            # If another process rotated it between our initial load and
+            # the lock acquisition, our cached refresh_token is already
+            # invalid; prefer `stored` when present. `cached` is non-None
+            # (guarded above), so `source` is too.
+            source: TokenData = stored if stored is not None else cached
+            new_tokens = oauth_refresh(
+                self._settings,
+                self._store,
+                source.refresh_token,
+                source.realm_id,
+            )
+            self._tokens = new_tokens
+            return new_tokens
 
     def _raise_api_error(self, resp: httpx.Response) -> None:
         try:

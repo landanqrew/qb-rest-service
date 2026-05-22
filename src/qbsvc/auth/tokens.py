@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +44,14 @@ class TokenStore(Protocol):
     """Pluggable storage for the QBO refresh-token blob.
 
     Single-realm: the store holds one TokenData at a time.
+
+    `refresh_lock` serializes the QBClient refresh path across the threads
+    FastAPI's sync handlers run in. The lock instance must be process-wide
+    (memoized in deps.py), otherwise concurrent per-request injections of
+    the store would each get their own lock and the serialization breaks.
     """
+
+    refresh_lock: "threading.Lock"
 
     def load(self) -> TokenData | None: ...
 
@@ -58,6 +66,7 @@ class FileTokenStore:
 
     def __init__(self, path: Path | None = None):
         self.path = path or DEFAULT_TOKEN_PATH
+        self.refresh_lock = threading.Lock()
 
     def load(self) -> TokenData | None:
         if not self.path.exists():
