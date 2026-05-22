@@ -1026,9 +1026,9 @@ def test_append_line_invalid_invoice_id_rejected_without_hitting_qbo(settings_en
     assert "invoice_id" in body["error"]["message"].lower()
 
 
-def test_append_line_missing_required_field_returns_400(settings_env, token_store):
+def test_append_line_missing_required_field_returns_422(settings_env, token_store):
     """Project-wide envelope handler reshapes RequestValidationError into
-    400 + VALIDATION_ERROR (errors.py:_validation). Append flow inherits
+    422 + VALIDATION_ERROR (errors.py:_validation). Append flow inherits
     that contract — QBO must not be hit when the body is malformed.
     """
     def handler(request):
@@ -1037,11 +1037,11 @@ def test_append_line_missing_required_field_returns_400(settings_env, token_stor
     client, _ = _make_client(token_store, handler)
     # qty is required.
     resp = client.post("/v1/invoices/42/lines", json={"item_id": "11"})
-    assert resp.status_code == 400
+    assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-def test_append_line_unknown_body_field_returns_400(settings_env, token_store):
+def test_append_line_unknown_body_field_returns_422(settings_env, token_store):
     """Strict validation — typos must be loud, not silently dropped."""
     def handler(request):
         pytest.fail("QBO must not be hit when the request body fails validation")
@@ -1051,7 +1051,7 @@ def test_append_line_unknown_body_field_returns_400(settings_env, token_store):
         "/v1/invoices/42/lines",
         json={"item_id": "11", "qty": 1, "rate": 75.0, "unit_price": 75.0},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
