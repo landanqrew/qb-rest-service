@@ -14,11 +14,11 @@ from qbsvc.routes._common import (
     list_entity,
 )
 
-router = APIRouter(prefix="/customers", tags=["customers"])
+router = APIRouter(prefix="/items", tags=["items"])
 
 
 @router.get("")
-def list_customers(
+def list_items(
     client: Annotated[QBClient, Depends(get_qb_client)],
     active: Annotated[bool, Query()] = True,
     modified_since: Annotated[
@@ -30,7 +30,7 @@ def list_customers(
 ) -> JSONResponse:
     return list_entity(
         client,
-        entity="Customer",
+        entity="Item",
         active=active,
         modified_since=modified_since,
         limit=limit,
@@ -38,9 +38,9 @@ def list_customers(
     )
 
 
-@router.get("/{customer_id}")
-def get_customer(
-    customer_id: str,
+@router.get("/{item_id}")
+def get_item(
+    item_id: str,
     client: Annotated[QBClient, Depends(get_qb_client)],
 ) -> JSONResponse:
-    return get_entity_detail(client, entity="Customer", entity_id=customer_id)
+    return get_entity_detail(client, entity="Item", entity_id=item_id)
