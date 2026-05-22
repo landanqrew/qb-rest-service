@@ -766,3 +766,410 @@ def test_create_non_duplicate_400_returns_502(settings_env, token_store):
     )
     assert resp.status_code == 502
     assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+# ---------- line append endpoint ----------
+
+
+def _invoice_for_append(id_: str, sync_token: str = "3") -> dict:
+    """An invoice that already has one item line and the QBO-appended
+    SubTotalLineDetail row. The append flow must preserve the item line,
+    drop the subtotal row, and add a new line before sparse-updating.
+    """
+    return _invoice(
+        id_,
+        SyncToken=sync_token,
+        Line=[
+            {
+                "Id": "1",
+                "LineNum": 1,
+                "Amount": 75.0,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                    "ItemRef": {"value": "9", "name": "Coliform Test"},
+                    "Qty": 1,
+                    "UnitPrice": 75.0,
+                },
+            },
+            {
+                "Amount": 75.0,
+                "DetailType": "SubTotalLineDetail",
+                "SubTotalLineDetail": {},
+            },
+        ],
+    )
+
+
+def _stale_sync_token_response() -> httpx.Response:
+    """Intuit's "Stale Object Error" — error code 5010 — fired when a sparse
+    update's SyncToken doesn't match the current value on the server. Two
+    concurrent appends race here: the loser sees this response.
+    """
+    return httpx.Response(
+        400,
+        json={
+            "Fault": {
+                "Error": [
+                    {
+                        "Message": "Stale Object Error",
+                        "Detail": (
+                            "Stale Object Error : You and seeddata were updating "
+                            "the same Invoice. Your changes are not saved."
+                        ),
+                        "code": "5010",
+                    }
+                ],
+                "type": "ValidationFault",
+            }
+        },
+    )
+
+
+def test_append_line_succeeds_and_returns_updated_invoice(settings_env, token_store):
+    """Acceptance: append succeeds; total recomputed by QBO. The route does
+    GET → strip SubTotal → append → sparse POST, and returns the updated
+    invoice in the standard envelope.
+    """
+    updated = _invoice(
+        "42",
+        SyncToken="4",
+        Line=[
+            {
+                "Id": "1",
+                "DetailType": "SalesItemLineDetail",
+                "Amount": 75.0,
+                "SalesItemLineDetail": {
+                    "ItemRef": {"value": "9"},
+                    "Qty": 1,
+                    "UnitPrice": 75.0,
+                },
+            },
+            {
+                "Id": "2",
+                "DetailType": "SalesItemLineDetail",
+                "Amount": 150.0,
+                "SalesItemLineDetail": {
+                    "ItemRef": {"value": "11"},
+                    "Qty": 2,
+                    "UnitPrice": 75.0,
+                },
+            },
+            {
+                "Amount": 225.0,
+                "DetailType": "SubTotalLineDetail",
+                "SubTotalLineDetail": {},
+            },
+        ],
+        TotalAmt=225.0,
+    )
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert request.method == "POST"
+        return _post_response(updated)
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 2, "rate": 75.0},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["Id"] == "42"
+    assert body["data"]["TotalAmt"] == 225.0
+    assert len(body["data"]["Line"]) == 3
+
+
+def test_append_line_sends_sparse_update_with_id_and_sync_token(settings_env, token_store):
+    """The POST body must carry Id, SyncToken, sparse=true, and the full
+    Line array (existing lines minus SubTotal, plus the appended line).
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42", sync_token="7")})
+        body = json.loads(request.content)
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "7"
+        assert body["sparse"] is True
+        # Existing item line preserved; SubTotal stripped; new line appended.
+        assert len(body["Line"]) == 2
+        # Subtotal row must NOT appear in the outbound body — QBO regenerates it.
+        detail_types = [line["DetailType"] for line in body["Line"]]
+        assert "SubTotalLineDetail" not in detail_types
+        # Original line kept verbatim.
+        assert body["Line"][0]["Id"] == "1"
+        # New line at the end, with the appended item/qty/rate.
+        new_line = body["Line"][-1]
+        assert new_line["DetailType"] == "SalesItemLineDetail"
+        assert new_line["Amount"] == 150.0  # 2 * 75
+        assert new_line["SalesItemLineDetail"]["ItemRef"] == {"value": "11"}
+        assert new_line["SalesItemLineDetail"]["Qty"] == 2
+        assert new_line["SalesItemLineDetail"]["UnitPrice"] == 75.0
+        return _post_response(_invoice_for_append("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 2, "rate": 75.0},
+    )
+    assert resp.status_code == 200
+
+
+def test_append_line_without_rate_omits_unit_price_and_amount(settings_env, token_store):
+    """Acceptance: rate-omitted line uses item's default price (QBO computes
+    Amount). The outbound line must therefore omit UnitPrice AND Amount so
+    QBO falls back to the item's stored price.
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        body = json.loads(request.content)
+        new_line = body["Line"][-1]
+        assert "Amount" not in new_line
+        assert "UnitPrice" not in new_line["SalesItemLineDetail"]
+        assert new_line["SalesItemLineDetail"]["ItemRef"] == {"value": "11"}
+        assert new_line["SalesItemLineDetail"]["Qty"] == 1
+        return _post_response(_invoice_for_append("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1},  # no rate
+    )
+    assert resp.status_code == 200
+
+
+def test_append_line_passes_description_when_present(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        body = json.loads(request.content)
+        assert body["Line"][-1]["Description"] == "rush job"
+        return _post_response(_invoice_for_append("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 50.0, "description": "rush job"},
+    )
+    assert resp.status_code == 200
+
+
+def test_append_line_stale_sync_token_returns_409(settings_env, token_store):
+    """Acceptance: two concurrent appends in sandbox — one wins, the other
+    gets 409. Intuit signals the race with error code 5010 (Stale Object
+    Error); the service maps it to HTTP 409 with QBO_STALE_SYNC_TOKEN so the
+    caller can re-fetch and retry deterministically.
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+    assert "qbo_detail" in body["error"]
+    assert "Stale Object" in body["error"]["qbo_detail"]
+
+
+def test_append_line_unknown_invoice_returns_404(settings_env, token_store):
+    """If the GET phase reports the invoice doesn't exist, propagate 404."""
+    def handler(request):
+        assert request.method == "GET"  # POST must not fire
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Object Not Found",
+                            "Detail": "Object Not Found",
+                            "code": "610",
+                        }
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/9999/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_append_line_invalid_invoice_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/0;DROP/lines",
+        json={"item_id": "11", "qty": 1},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
+
+
+def test_append_line_missing_required_field_returns_400(settings_env, token_store):
+    """Project-wide envelope handler reshapes RequestValidationError into
+    400 + VALIDATION_ERROR (errors.py:_validation). Append flow inherits
+    that contract — QBO must not be hit when the body is malformed.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    # qty is required.
+    resp = client.post("/v1/invoices/42/lines", json={"item_id": "11"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_append_line_unknown_body_field_returns_400(settings_env, token_store):
+    """Strict validation — typos must be loud, not silently dropped."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0, "unit_price": 75.0},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_append_line_amount_is_rounded_to_two_decimal_places(settings_env, token_store):
+    """Same float-artefact guard as the create path."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        body = json.loads(request.content)
+        assert body["Line"][-1]["Amount"] == 0.30
+        return _post_response(_invoice_for_append("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 3, "rate": 0.10},
+    )
+    assert resp.status_code == 200
+
+
+def test_append_line_propagates_qbo_5xx_as_502(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_append_line_non_stale_400_returns_502(settings_env, token_store):
+    """Only error code 5010 maps to 409. Other 400s stay as 502 QBO_ERROR."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Required param missing",
+                            "Detail": "Required param missing.",
+                            "code": "2020",
+                        }
+                    ]
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_append_line_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+def test_append_line_partial_invoice_body_returns_502(settings_env, token_store):
+    """Defence in depth: if QBO returns a 200 with an Invoice object missing
+    Id or SyncToken (beta-API quirk / partial response), the route must emit
+    a clean 502 rather than crash with a KeyError into an unhandled 500.
+    """
+    def handler(request):
+        assert request.method == "GET"  # POST must not fire without a SyncToken
+        return httpx.Response(
+            200,
+            json={"Invoice": {"DocNumber": "26-02-0042"}},  # no Id, no SyncToken
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_ERROR"
+    assert "Id" in body["error"]["message"] or "SyncToken" in body["error"]["message"]
+
+
+def test_append_line_invoice_with_no_existing_lines_works(settings_env, token_store):
+    """An empty invoice (created via POST /invoices with no lines) must
+    support the first append — Line key absent → treat as empty list.
+    """
+    empty_invoice = _invoice("42", SyncToken="0")  # no Line key
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": empty_invoice})
+        body = json.loads(request.content)
+        assert len(body["Line"]) == 1
+        return _post_response(_invoice_for_append("42", sync_token="1"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices/42/lines",
+        json={"item_id": "11", "qty": 1, "rate": 75.0},
+    )
+    assert resp.status_code == 200
