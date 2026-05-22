@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from qbsvc.api.client import QBClient
 from qbsvc.deps import get_qb_client
@@ -128,11 +128,27 @@ class InvoiceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     customer_id: str
-    doc_number: str
+    # QBO stores DocNumber as a string capped at 21 chars; rejecting longer
+    # values here means callers see a 422 with the field name instead of an
+    # opaque 502 from QBO downstream.
+    doc_number: str = Field(min_length=1, max_length=21)
     txn_date: str | None = None
     lines: list[InvoiceLineCreate] = Field(default_factory=list)
     memo: str | None = None
     customer_memo: str | None = None
+
+    @model_validator(mode="after")
+    def _every_line_must_have_rate(self) -> "InvoiceCreate":
+        # QBO requires `Amount` on every SalesItemLineDetail line and we
+        # compute Amount from qty * rate; without a rate, the resulting body
+        # would round-trip to QBO and come back as an opaque 502. Rate-less
+        # lines belong on the append flow (#9), not the create body.
+        if any(line.rate is None for line in self.lines):
+            raise ValueError(
+                "rate is required for every line on invoice create; "
+                "use POST /invoices/{id}/lines to append a rate-less line"
+            )
+        return self
 
 
 def _line_to_qbo(line: InvoiceLineCreate) -> dict[str, Any]:
@@ -147,12 +163,13 @@ def _line_to_qbo(line: InvoiceLineCreate) -> dict[str, Any]:
         "DetailType": "SalesItemLineDetail",
         "SalesItemLineDetail": detail,
     }
-    # QBO requires Amount on each line and does not compute it server-side;
-    # only set it when we have a rate. When rate is absent the caller is
-    # expected to follow up with the line-append flow (#9) which can look
-    # the item's default rate up.
+    # QBO requires Amount on each line and stores it as decimal(12,2); round
+    # at the boundary so float artefacts like `3.0 * 0.10 = 0.30000000000000004`
+    # never reach Intuit. `InvoiceCreate._every_line_must_have_rate` already
+    # guarantees `rate` is set when a line is present on create, but we keep
+    # the None branch for defence-in-depth.
     if line.rate is not None:
-        qbo_line["Amount"] = line.qty * line.rate
+        qbo_line["Amount"] = round(line.qty * line.rate, 2)
     if line.description is not None:
         qbo_line["Description"] = line.description
     return qbo_line
@@ -186,6 +203,9 @@ def _is_duplicate_doc_number(exc: APIError) -> bool:
     return False
 
 
+# `status_code=201` on the decorator drives the OpenAPI schema; the explicit
+# `JSONResponse(status_code=201, ...)` below is what actually sets the HTTP
+# status at runtime. Both are needed — see FastAPI #5290.
 @router.post("", status_code=201)
 def create_invoice(
     payload: InvoiceCreate,

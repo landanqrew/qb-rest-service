@@ -669,6 +669,76 @@ def test_create_unauthenticated_returns_503(settings_env, tmp_path):
     assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
 
 
+def test_create_line_without_rate_returns_422(settings_env, token_store):
+    """A line with qty but no rate must be rejected at validation time (422),
+    not sent to QBO where the missing Amount would surface as an opaque 502.
+    Rate-less lines belong on the append flow (#9).
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when a line is missing its rate")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "lines": [{"item_id": "9", "qty": 1}],  # rate absent
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_create_doc_number_too_long_returns_422(settings_env, token_store):
+    """QBO truncates DocNumber at 21 chars; surface the limit at the API
+    boundary instead of silently storing a clipped value.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when doc_number exceeds 21 chars")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "x" * 22},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_empty_doc_number_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when doc_number is empty")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": ""},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_amount_is_rounded_to_two_decimal_places(settings_env, token_store):
+    """`Amount = qty * rate` rounds at the API boundary so float artefacts
+    like 3 * 0.10 = 0.30000000000000004 never reach QBO's decimal(12,2)
+    Amount field.
+    """
+    def handler(request):
+        body = json.loads(request.content)
+        amount = body["Line"][0]["Amount"]
+        assert amount == 0.30
+        return _post_response(_invoice("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "lines": [{"item_id": "9", "qty": 3, "rate": 0.10}],
+        },
+    )
+    assert resp.status_code == 201
+
+
 def test_create_non_duplicate_400_returns_502(settings_env, token_store):
     """Defence in depth: a QBO 400 that is NOT the duplicate-DocNumber error
     must not be misclassified as 409. We only specialize on code 6240.
