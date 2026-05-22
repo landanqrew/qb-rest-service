@@ -9,9 +9,9 @@ from urllib.parse import urlencode, parse_qs, urlparse
 
 import httpx
 
-from qbsvc.config import Config
+from qbsvc.auth.tokens import TokenData, TokenStore
+from qbsvc.config import Settings
 from qbsvc.exceptions import AuthError
-from qbsvc.auth.token_store import TokenData, save_tokens
 
 AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -20,9 +20,26 @@ REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 SCOPES = "com.intuit.quickbooks.accounting"
 
 
-def login(config: Config, alias: str) -> TokenData:
-    """Run the full OAuth authorization code flow for Intuit."""
-    config.require("client_id", "client_secret")
+def _require_creds(settings: Settings) -> None:
+    missing = [
+        name
+        for name, value in (
+            ("intuit_client_id", settings.intuit_client_id),
+            ("intuit_client_secret", settings.intuit_client_secret),
+        )
+        if not value
+    ]
+    if missing:
+        raise AuthError(f"Missing Intuit credentials: {', '.join(missing)}")
+
+
+def login(settings: Settings, store: TokenStore) -> TokenData:
+    """Run the full OAuth authorization code flow for Intuit.
+
+    Note: the localhost-callback flow here is the dev/CLI path. Production
+    OAuth lands via FastAPI routes (issue #3).
+    """
+    _require_creds(settings)
 
     state = secrets.token_urlsafe(32)
     auth_code: str | None = None
@@ -59,10 +76,10 @@ def login(config: Config, alias: str) -> TokenData:
             self.wfile.write(html.encode())
 
         def log_message(self, format, *args):
-            pass  # suppress server logs
+            pass
 
     params = {
-        "client_id": config.client_id,
+        "client_id": settings.intuit_client_id,
         "response_type": "code",
         "scope": SCOPES,
         "redirect_uri": REDIRECT_URI,
@@ -87,18 +104,23 @@ def login(config: Config, alias: str) -> TokenData:
     if not realm_id:
         raise AuthError("No realm ID (company ID) received from Intuit.")
 
-    tokens = _exchange_code(config, auth_code, realm_id)
-    save_tokens(alias, tokens)
+    tokens = _exchange_code(settings, auth_code, realm_id)
+    store.save(tokens)
     return tokens
 
 
-def refresh(config: Config, alias: str, refresh_token: str, realm_id: str) -> TokenData:
-    """Exchange a refresh token for new tokens."""
-    config.require("client_id", "client_secret")
+def refresh(
+    settings: Settings,
+    store: TokenStore,
+    refresh_token: str,
+    realm_id: str,
+) -> TokenData:
+    """Exchange a refresh token for new tokens and persist the rotation."""
+    _require_creds(settings)
 
     resp = httpx.post(
         TOKEN_URL,
-        auth=(config.client_id, config.client_secret),
+        auth=(settings.intuit_client_id, settings.intuit_client_secret),
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
@@ -109,15 +131,15 @@ def refresh(config: Config, alias: str, refresh_token: str, realm_id: str) -> To
         raise AuthError(f"Token refresh failed ({resp.status_code}): {resp.text}")
 
     tokens = _parse_token_response(resp.json(), realm_id)
-    save_tokens(alias, tokens)
+    store.save(tokens)
     return tokens
 
 
-def _exchange_code(config: Config, code: str, realm_id: str) -> TokenData:
+def _exchange_code(settings: Settings, code: str, realm_id: str) -> TokenData:
     """Exchange authorization code for tokens."""
     resp = httpx.post(
         TOKEN_URL,
-        auth=(config.client_id, config.client_secret),
+        auth=(settings.intuit_client_id, settings.intuit_client_secret),
         data={
             "grant_type": "authorization_code",
             "code": code,
