@@ -240,3 +240,149 @@ def create_invoice(
 
     body = DetailResponse(data=invoice)
     return JSONResponse(status_code=201, content=body.model_dump(exclude_none=True))
+
+
+# Intuit's "Stale Object Error" fault code, raised on sparse updates whose
+# SyncToken doesn't match the server's current value. Surfaced as HTTP 409
+# (QBO_STALE_SYNC_TOKEN) so the caller can re-fetch the invoice and retry
+# the append against the new SyncToken — see scope §6.
+_STALE_SYNC_TOKEN_CODE = "5010"
+
+
+class InvoiceLineAppend(BaseModel):
+    """Request body for `POST /v1/invoices/{id}/lines` — a single new line.
+
+    `extra="forbid"` mirrors the create flow so typos on the web app side
+    (e.g. `unit_price` instead of `rate`) error loudly instead of being
+    silently dropped and producing a wrong invoice total.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    qty: float
+    rate: float | None = None
+    description: str | None = None
+
+
+def _strip_subtotal_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # QBO appends a `SubTotalLineDetail` row to every invoice it returns. If
+    # we POST it back inside a sparse update, QBO rejects the payload because
+    # the subtotal is server-managed. Drop it before re-sending — QBO
+    # regenerates it on the response.
+    return [line for line in lines if line.get("DetailType") != "SubTotalLineDetail"]
+
+
+def _is_stale_sync_token(exc: APIError) -> bool:
+    if exc.status_code != 400 or not isinstance(exc.raw, dict):
+        return False
+    fault = exc.raw.get("Fault") or {}
+    for error in fault.get("Error", []):
+        if str(error.get("code", "")) == _STALE_SYNC_TOKEN_CODE:
+            return True
+    return False
+
+
+def _append_line_to_qbo(line: InvoiceLineAppend) -> dict[str, Any]:
+    # Mirrors `_line_to_qbo` but tuned for the append flow: when `rate` is
+    # omitted we deliberately leave both `UnitPrice` and `Amount` off the
+    # line so QBO falls back to the item's stored default price and
+    # computes Amount itself (acceptance criterion in #9).
+    detail: dict[str, Any] = {
+        "ItemRef": {"value": line.item_id},
+        "Qty": line.qty,
+    }
+    if line.rate is not None:
+        detail["UnitPrice"] = line.rate
+
+    qbo_line: dict[str, Any] = {
+        "DetailType": "SalesItemLineDetail",
+        "SalesItemLineDetail": detail,
+    }
+    if line.rate is not None:
+        qbo_line["Amount"] = round(line.qty * line.rate, 2)
+    if line.description is not None:
+        qbo_line["Description"] = line.description
+    return qbo_line
+
+
+@router.post("/{invoice_id}/lines")
+def append_invoice_line(
+    invoice_id: str,
+    payload: InvoiceLineAppend,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
+
+    # Sparse update needs the current SyncToken and the existing Line array
+    # — QBO replaces Line wholesale when sparse=true names it, so we read,
+    # mutate, and write back in one round-trip.
+    try:
+        get_resp = client.get(f"invoice/{invoice_id}")
+    except AuthError as exc:
+        return error_response(exc.code, str(exc), 503)
+    except TokenStoreError as exc:
+        return error_response("TOKEN_STORE_FAILED", str(exc), 503)
+    except RateLimitError as exc:
+        return error_response("RATE_LIMITED", str(exc), 429)
+    except APIError as exc:
+        if exc.status_code == 404 or (
+            exc.status_code == 400 and "object not found" in exc.detail.lower()
+        ):
+            return error_response(
+                "NOT_FOUND",
+                f"Invoice {invoice_id} not found",
+                404,
+                qbo_detail=exc.detail,
+            )
+        return error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
+
+    invoice = get_resp.get("Invoice")
+    if invoice is None:
+        return error_response("NOT_FOUND", f"Invoice {invoice_id} not found", 404)
+
+    existing_lines = invoice.get("Line") or []
+    new_lines = _strip_subtotal_lines(existing_lines) + [_append_line_to_qbo(payload)]
+    sparse_body: dict[str, Any] = {
+        "Id": invoice["Id"],
+        "SyncToken": invoice["SyncToken"],
+        "sparse": True,
+        "Line": new_lines,
+    }
+
+    try:
+        post_resp = client.post("invoice", json_body=sparse_body)
+    except AuthError as exc:
+        return error_response(exc.code, str(exc), 503)
+    except TokenStoreError as exc:
+        return error_response("TOKEN_STORE_FAILED", str(exc), 503)
+    except RateLimitError as exc:
+        return error_response("RATE_LIMITED", str(exc), 429)
+    except APIError as exc:
+        if _is_stale_sync_token(exc):
+            return error_response(
+                "QBO_STALE_SYNC_TOKEN",
+                (
+                    f"Invoice {invoice_id} was modified by another writer; "
+                    "re-fetch and retry the append"
+                ),
+                409,
+                qbo_detail=exc.detail,
+            )
+        return error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
+
+    updated = post_resp.get("Invoice")
+    if updated is None:
+        return error_response(
+            "QBO_ERROR",
+            "QBO did not return an Invoice in the sparse-update response",
+            502,
+        )
+
+    body = DetailResponse(data=updated)
+    return JSONResponse(status_code=200, content=body.model_dump(exclude_none=True))
