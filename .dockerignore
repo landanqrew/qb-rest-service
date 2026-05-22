@@ -15,7 +15,6 @@ __pycache__
 tests
 docs
 deploy
-README.md
 LICENSE
 CLAUDE.md
 Dockerfile
