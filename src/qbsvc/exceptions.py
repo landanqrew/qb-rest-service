@@ -42,7 +42,18 @@ class APIError(QBError):
 
 
 class RateLimitError(QBError):
-    """API rate limit exceeded."""
+    """Rate limit exceeded — either by QBO (after a retry) or by the
+    process-local token bucket in front of QBClient.
+
+    `retry_after` is set (in seconds) when the bucket trips locally, so the
+    HTTP layer can surface a Retry-After header to the caller. It stays
+    None for the post-retry QBO 429 path, which has no useful retry hint
+    to forward.
+    """
+
+    def __init__(self, message: str = "Rate limited", *, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class PaginationError(QBError):
