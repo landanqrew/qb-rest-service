@@ -29,6 +29,7 @@ class DetailResponse(BaseModel):
 class ErrorPayload(BaseModel):
     code: str
     message: str
+    request_id: str | None = None
     qbo_detail: str | None = None
 
 

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from qbsvc.api.client import QBClient
 from qbsvc.api.cursors import decode_cursor, encode_cursor
+from qbsvc.errors import envelope as error_envelope
 from qbsvc.exceptions import (
     APIError,
     AuthError,
@@ -16,8 +17,6 @@ from qbsvc.exceptions import (
 )
 from qbsvc.schemas import (
     DetailResponse,
-    ErrorPayload,
-    ErrorResponse,
     ListResponse,
     Pagination,
 )
@@ -44,12 +43,9 @@ def parse_iso_date(value: str) -> date | None:
 def error_response(
     code: str, message: str, status: int, qbo_detail: str | None = None
 ) -> JSONResponse:
-    payload = ErrorResponse(
-        error=ErrorPayload(code=code, message=message, qbo_detail=qbo_detail)
-    )
-    return JSONResponse(
-        status_code=status, content=payload.model_dump(exclude_none=True)
-    )
+    """Shim that delegates to the canonical envelope builder so existing
+    callers automatically pick up request_id propagation."""
+    return error_envelope(code, message, status, qbo_detail=qbo_detail)
 
 
 def is_not_found(exc: APIError) -> bool:
