@@ -19,13 +19,16 @@ from qbsvc.routes._common import (
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
 # QBO entity IDs are numeric strings; pinning to digits keeps any quote or
-# whitespace out of the interpolated SQL literal.
+# whitespace out of the interpolated SQL literal and out of the URL segment
+# used by the detail endpoint.
 _CUSTOMER_ID_RE = re.compile(r"^\d{1,20}$")
+_INVOICE_ID_RE = re.compile(r"^\d{1,20}$")
 
 # DocNumber is a free-form QBO string capped at 21 chars; the lab format is
 # YY-MM-####. The allowlist (letters, digits, dash, underscore, dot, space)
 # covers every shape we expect and excludes single quotes / SQL meta-chars
-# so the value can be inlined into the WHERE clause safely.
+# so the value can be inlined into the WHERE clause safely. Callers strip
+# the value before matching so padded query params can't silently zero-match.
 _DOC_NUMBER_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,21}$")
 
 
@@ -54,6 +57,9 @@ def list_invoices(
             )
         filters.append(f"CustomerRef = '{customer_id}'")
     if doc_number is not None:
+        # Strip first so a padded query-string value (e.g. " 26-02-0071")
+        # doesn't silently zero-match against QBO's unpadded stored value.
+        doc_number = doc_number.strip()
         if not _DOC_NUMBER_RE.fullmatch(doc_number):
             return error_response(
                 "INVALID_PARAM",
@@ -77,4 +83,10 @@ def get_invoice(
     invoice_id: str,
     client: Annotated[QBClient, Depends(get_qb_client)],
 ) -> JSONResponse:
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
     return get_entity_detail(client, entity="Invoice", entity_id=invoice_id)

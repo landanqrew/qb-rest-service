@@ -254,6 +254,24 @@ def test_invalid_doc_number_rejected_without_hitting_qbo(settings_env, token_sto
     assert "doc_number" in body["error"]["message"].lower()
 
 
+def test_doc_number_is_stripped_before_matching(settings_env, token_store):
+    """A padded query-string value must not silently zero-match against QBO's
+    unpadded stored DocNumber. Strip leading/trailing whitespace before
+    interpolating into the SQL literal.
+    """
+    def handler(request):
+        return _query_response([_invoice("1")])
+
+    client, recorder = _make_client(token_store, handler)
+    # %20 = space; client passes "  26-02-71  ".
+    resp = client.get("/v1/invoices?doc_number=%20%2026-02-71%20%20")
+    assert resp.status_code == 200
+    sql = recorder.last_query
+    assert "DocNumber = '26-02-71'" in sql
+    assert "' 26" not in sql
+    assert "71 '" not in sql
+
+
 def test_limit_param_is_propagated_to_qbo(settings_env, token_store):
     def handler(request):
         return _query_response([_invoice(str(i)) for i in range(5)])
@@ -329,6 +347,21 @@ def test_detail_returns_invoice_with_full_line_array(settings_env, token_store):
     assert "SubTotalLineDetail" in detail_types
     subtotal = next(l for l in lines if l["DetailType"] == "SubTotalLineDetail")
     assert "SubTotalLineDetail" in subtotal
+
+
+def test_detail_invalid_id_rejected_without_hitting_qbo(settings_env, token_store):
+    """Defence-in-depth: a non-numeric invoice_id must produce a clean 400
+    rather than an opaque QBO error.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.get("/v1/invoices/0;%20DROP%20TABLE")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
 
 
 def test_detail_unknown_id_returns_404(settings_env, token_store):
