@@ -106,7 +106,11 @@ def list_entity(
 
     # Fetch limit+1 to detect has_more without a second round-trip; trim
     # before returning so the page never exceeds the requested size.
-    fetch_size = limit + 1
+    # Clamped to QBO's documented 1000-row hard cap: at limit=MAX_PAGE_SIZE
+    # the has_more probe slot is lost and a full 1000-row page reports
+    # has_more=false even if a 1001st row exists. Callers needing exact
+    # boundary detection should page with a smaller window.
+    fetch_size = min(limit + 1, 1000)
     sql = (
         f"SELECT * FROM {entity} WHERE {where} "
         f"STARTPOSITION {start} MAXRESULTS {fetch_size}"
@@ -168,7 +172,7 @@ def get_entity_detail(
         return error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
 
     entity_body = resp.get(entity)
-    if not entity_body:
+    if entity_body is None:
         return error_response("NOT_FOUND", f"{label} {entity_id} not found", 404)
 
     body = DetailResponse(data=entity_body)
