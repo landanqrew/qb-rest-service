@@ -118,7 +118,8 @@ class QBClient:
                 },
             )
             raise RateLimitError(
-                "Local rate limit exceeded.", retry_after=1
+                "Local rate limit exceeded.",
+                retry_after=self._bucket.retry_after_seconds,
             )
 
         tokens = self._ensure_tokens()

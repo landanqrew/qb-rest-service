@@ -83,6 +83,21 @@ def test_bucket_steady_state_at_limit_succeeds():
         assert bucket.try_acquire() is True, "steady-state at the limit should not 429"
 
 
+def test_bucket_retry_after_seconds_scales_with_rate():
+    """The HTTP Retry-After hint must reflect the configured refill rate.
+    At 8 tok/sec (the default 480/min), one token is ~125ms away, so 1s is
+    correct. At 0.5 tok/sec (30/min), a token is 2s away — a hardcoded 1s
+    would tell well-behaved callers to retry too early and earn them an
+    immediate second 429.
+    """
+    assert TokenBucket(rate_per_sec=8.0, capacity=1).retry_after_seconds == 1
+    assert TokenBucket(rate_per_sec=1.0, capacity=1).retry_after_seconds == 1
+    assert TokenBucket(rate_per_sec=0.5, capacity=1).retry_after_seconds == 2
+    assert TokenBucket(rate_per_sec=0.1, capacity=1).retry_after_seconds == 10
+    # rate=0 (test-only configuration) must still yield a usable, finite hint
+    assert TokenBucket(rate_per_sec=0.0, capacity=1).retry_after_seconds == 1
+
+
 def test_bucket_is_thread_safe():
     """Concurrent callers must between them acquire exactly `capacity` tokens
     in a small window where no refill has occurred (advancing clock is held
@@ -151,10 +166,12 @@ def test_qbclient_raises_local_rate_limit_when_bucket_drained(fresh_store):
     client.get("customer/1")
     assert upstream_hits["n"] == 2
 
-    # Third must be refused locally with retry_after set, and must not hit QBO
+    # Third must be refused locally with retry_after set, and must not hit QBO.
+    # `retry_after` reflects the bucket's actual refill rate (rate=0 → 1s
+    # fallback) rather than a hardcoded value.
     with pytest.raises(RateLimitError) as excinfo:
         client.get("customer/1")
-    assert excinfo.value.retry_after == 1
+    assert excinfo.value.retry_after == bucket.retry_after_seconds
     assert upstream_hits["n"] == 2, "local rate-limit must not reach QBO"
 
 
@@ -196,6 +213,27 @@ def test_qbclient_unbounded_by_default(fresh_store):
 
 
 # ---------- Settings ----------
+
+
+def test_qbo_rate_limiter_is_process_wide_singleton():
+    """The whole point of the deps.py memoization is that every QBClient in
+    the process draws from one bucket. If lru_cache ever stops returning the
+    same instance, the limit silently stops constraining anything — pin the
+    invariant with a direct test so a future refactor can't quietly break it.
+    """
+    from qbsvc.deps import _qbo_rate_limiter, reset_rate_limiter_cache
+
+    reset_rate_limiter_cache()
+    try:
+        b1 = _qbo_rate_limiter(480, 16)
+        b2 = _qbo_rate_limiter(480, 16)
+        assert b1 is b2, "rate limiter must be a process-wide singleton"
+        # Different config tuples are allowed to give different instances —
+        # the contract is "same config → same instance", not "always same".
+        b3 = _qbo_rate_limiter(60, 4)
+        assert b3 is not b1
+    finally:
+        reset_rate_limiter_cache()
 
 
 def test_settings_have_rate_limit_defaults():
