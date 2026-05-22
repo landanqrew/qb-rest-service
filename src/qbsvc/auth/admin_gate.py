@@ -23,6 +23,13 @@ already validated at the edge. We do not re-verify the signature here:
 When `admin_allowlist` is empty the gate is OFF. That matches local dev
 (no Cloud Run, no JWT) and keeps the existing test suite running without
 needing each test to fabricate a bearer token.
+
+**Caveat: this trust model assumes Cloud Run (or an equivalent IAM-aware
+edge proxy) is in front of the container.** If you ever set
+`QBSVC_ADMIN_ALLOWLIST` in an environment without that edge — direct
+exposure, a different reverse proxy, a `kubectl port-forward` — the JWT
+contents are attacker-controlled and the gate degrades to a string
+comparison against unverified input. Don't do that.
 """
 from __future__ import annotations
 
@@ -31,7 +38,7 @@ import json
 import logging
 from typing import Callable
 
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from qbsvc.config import Settings, get_settings
 from qbsvc.request_context import get_request_id
@@ -112,6 +119,12 @@ def extract_email_from_bearer(authorization: str | None) -> str | None:
         payload_raw = base64.urlsafe_b64decode(payload_b64 + padding)
         payload = json.loads(payload_raw)
     except (ValueError, json.JSONDecodeError):
+        return None
+
+    # JWT payloads are JSON objects per the spec, but a crafted token whose
+    # payload segment decodes to a JSON array or scalar would slip past the
+    # decode and crash `.get(...)`. Guard before reading the claim.
+    if not isinstance(payload, dict):
         return None
 
     email = payload.get("email")

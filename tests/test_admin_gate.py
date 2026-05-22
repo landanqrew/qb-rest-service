@@ -14,7 +14,6 @@ import base64
 import json
 from typing import Iterable
 
-import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -237,6 +236,38 @@ def test_extract_email_returns_none_for_garbled_token():
 def test_extract_email_returns_none_when_payload_has_no_email():
     token = _jwt({"sub": "1234"})
     assert extract_email_from_bearer(f"Bearer {token}") is None
+
+
+def test_extract_email_returns_none_for_non_dict_payload():
+    """JWT payloads are JSON objects per spec, but a crafted token whose
+    payload is a JSON array (or scalar) used to crash `.get(...)`. The
+    guard turns it into a clean None → caller gets a 403, not a 500."""
+    header_b64 = (
+        base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT"}').rstrip(b"=").decode()
+    )
+    array_payload_b64 = (
+        base64.urlsafe_b64encode(b"[1,2,3]").rstrip(b"=").decode()
+    )
+    token = f"{header_b64}.{array_payload_b64}.sig"
+    assert extract_email_from_bearer(f"Bearer {token}") is None
+
+
+def test_admin_paths_403_on_jwt_with_array_payload():
+    """End-to-end: a forged token with an array payload returns 403, not 500."""
+    header_b64 = (
+        base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT"}').rstrip(b"=").decode()
+    )
+    array_payload_b64 = (
+        base64.urlsafe_b64encode(b"[1,2,3]").rstrip(b"=").decode()
+    )
+    token = f"{header_b64}.{array_payload_b64}.sig"
+
+    client = TestClient(_build_app(allowlist=[ADMIN_EMAIL]))
+    resp = client.get(
+        "/admin/oauth/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
 
 
 # ---------- settings parsing ----------
