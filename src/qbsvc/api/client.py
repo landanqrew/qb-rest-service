@@ -4,10 +4,10 @@ import time
 
 import httpx
 
-from qbsvc.auth.oauth import refresh
-from qbsvc.auth.token_store import TokenData, load_tokens
-from qbsvc.config import Config
-from qbsvc.exceptions import AuthError, APIError, RateLimitError
+from qbsvc.auth.oauth import refresh as oauth_refresh
+from qbsvc.auth.tokens import TokenData, TokenStore
+from qbsvc.config import Settings, get_settings
+from qbsvc.exceptions import APIError, AuthError, RateLimitError
 
 BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
 MINOR_VERSION = "75"
@@ -16,9 +16,9 @@ MINOR_VERSION = "75"
 class QBClient:
     """Synchronous REST client for QuickBooks Online with auth and rate-limit handling."""
 
-    def __init__(self, config: Config | None = None, company: str | None = None):
-        self.config = config or Config.load()
-        self._company = self.config.resolve_company(company)
+    def __init__(self, token_store: TokenStore, settings: Settings | None = None):
+        self._store = token_store
+        self._settings = settings or get_settings()
         self._tokens: TokenData | None = None
         self._http = httpx.Client(timeout=30)
 
@@ -43,10 +43,8 @@ class QBClient:
         """Execute a QBO SQL-like query and return the list of entities."""
         resp = self._request("GET", "query", params={"query": sql})
 
-        # QBO wraps query results in QueryResponse
         query_response = resp.get("QueryResponse", {})
 
-        # The entity key varies — find the first list value
         for value in query_response.values():
             if isinstance(value, list):
                 return value
@@ -76,7 +74,6 @@ class QBClient:
 
         resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
 
-        # Handle 429 with a single retry
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
             time.sleep(retry_after)
@@ -85,7 +82,6 @@ class QBClient:
                 raise RateLimitError("Rate limited after retry. Try again later.")
 
         if resp.status_code == 401:
-            # Token may have just expired — try one refresh
             tokens = self._refresh_tokens()
             headers["Authorization"] = f"Bearer {tokens.access_token}"
             resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
@@ -96,14 +92,13 @@ class QBClient:
         return resp.json()
 
     def _ensure_tokens(self) -> TokenData:
-        """Load tokens, refreshing if expired."""
+        """Load tokens from the store, refreshing if expired."""
         if self._tokens is None:
-            self._tokens = load_tokens(self._company)
+            self._tokens = self._store.load()
 
         if self._tokens is None:
             raise AuthError(
-                f"Not authenticated for company '{self._company}'. "
-                f"Run `qb auth login --alias {self._company}`."
+                "Not authenticated. Run the OAuth flow at /admin/oauth/start."
             )
 
         if self._tokens.is_expired:
@@ -114,12 +109,14 @@ class QBClient:
     def _refresh_tokens(self) -> TokenData:
         if self._tokens is None:
             raise AuthError("No tokens to refresh.")
-        return refresh(
-            self.config,
-            self._company,
+        new_tokens = oauth_refresh(
+            self._settings,
+            self._store,
             self._tokens.refresh_token,
             self._tokens.realm_id,
         )
+        self._tokens = new_tokens
+        return new_tokens
 
     def _raise_api_error(self, resp: httpx.Response) -> None:
         try:
