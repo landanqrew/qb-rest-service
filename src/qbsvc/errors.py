@@ -74,7 +74,10 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RateLimitError)
     async def _rate(_request: Request, exc: RateLimitError) -> JSONResponse:
-        return envelope("RATE_LIMITED", str(exc), status=429)
+        response = envelope("RATE_LIMITED", str(exc), status=429)
+        if exc.retry_after is not None:
+            response.headers["Retry-After"] = str(exc.retry_after)
+        return response
 
     @app.exception_handler(APIError)
     async def _api(_request: Request, exc: APIError) -> JSONResponse:

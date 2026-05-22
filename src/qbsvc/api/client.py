@@ -6,6 +6,7 @@ import time
 
 import httpx
 
+from qbsvc.api.rate_limit import TokenBucket
 from qbsvc.auth.oauth import refresh as oauth_refresh
 from qbsvc.auth.tokens import TokenData, TokenStore
 from qbsvc.config import Settings, get_settings
@@ -27,11 +28,24 @@ class QBClient:
     win in throughput here.
     """
 
-    def __init__(self, token_store: TokenStore, settings: Settings | None = None):
+    def __init__(
+        self,
+        token_store: TokenStore,
+        settings: Settings | None = None,
+        rate_limiter: TokenBucket | None = None,
+    ):
         self._store = token_store
         self._settings = settings or get_settings()
         self._tokens: TokenData | None = None
         self._http = httpx.Client(timeout=30)
+        # When no shared bucket is injected, fall back to a per-instance one
+        # sized off settings. Tests rely on this so they don't have to wire
+        # one up every time; deps.py injects a process-wide bucket in prod
+        # so the limit actually constrains concurrent FastAPI requests.
+        self._bucket = rate_limiter or TokenBucket(
+            rate_per_sec=self._settings.rate_limit_per_min / 60.0,
+            capacity=self._settings.rate_limit_burst,
+        )
 
     def get(self, endpoint: str, params: dict | None = None) -> dict:
         """GET a QBO resource. Endpoint is relative (e.g. 'customer/123')."""
@@ -91,6 +105,22 @@ class QBClient:
         params: dict | None = None,
         json_body: dict | None = None,
     ) -> dict:
+        if not self._bucket.try_acquire():
+            # Local fail-fast: we trip our own bucket before QBO's 500/min
+            # ceiling would. Log so operators can see when load is hitting
+            # the cap, and surface retry_after so the HTTP layer can return
+            # 429 with a Retry-After header.
+            _log.warning(
+                "qbo_rate_limited_local",
+                extra={
+                    "method": method,
+                    "qbo_endpoint": endpoint,
+                },
+            )
+            raise RateLimitError(
+                "Local rate limit exceeded.", retry_after=1
+            )
+
         tokens = self._ensure_tokens()
         url = f"{BASE_URL}/{tokens.realm_id}/{endpoint}"
 
