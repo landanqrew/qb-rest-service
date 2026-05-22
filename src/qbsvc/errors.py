@@ -99,18 +99,16 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _validation(
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        # FastAPI's default returns 422 with a pydantic-shaped body that
-        # leaks internals. Reshape to the envelope and use 400 because
-        # scope §6 reserves 4xx for caller-visible client errors. All
-        # failures are joined into one message so the caller can fix every
-        # bad field in a single round-trip.
+        # Reshape FastAPI's pydantic-flavored 422 body into our envelope.
+        # All field failures are joined into one message so the caller can
+        # fix every bad field in a single round-trip.
         parts: list[str] = []
         for err in exc.errors():
             loc = ".".join(str(p) for p in err.get("loc", []))
             msg = err.get("msg", "Invalid request")
             parts.append(f"{loc}: {msg}" if loc else msg)
         message = "; ".join(parts) if parts else "Invalid request"
-        return envelope("VALIDATION_ERROR", message, status=400)
+        return envelope("VALIDATION_ERROR", message, status=422)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(_request: Request, exc: StarletteHTTPException) -> JSONResponse:

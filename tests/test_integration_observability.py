@@ -145,7 +145,7 @@ def test_validation_error_uses_envelope_shape(settings_env, token_store):
     c = _app_with_qbo(token_store, handler)
     # limit must be >=1 — passing 0 trips pydantic validation.
     resp = c.get("/v1/customers?limit=0")
-    assert resp.status_code == 400
+    assert resp.status_code == 422
     body = resp.json()
     assert body["error"]["code"] == "VALIDATION_ERROR"
     assert body["error"]["request_id"] == resp.headers["X-Request-ID"]

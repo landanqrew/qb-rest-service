@@ -126,11 +126,12 @@ def test_api_error_object_not_found_returns_404(client):
     assert body["error"]["code"] == "NOT_FOUND"
 
 
-def test_validation_error_returns_400_envelope(client):
-    """FastAPI's default RequestValidationError 422 leaks pydantic detail
-    shape that doesn't match our envelope. The handler reshapes it."""
+def test_validation_error_returns_422_envelope(client):
+    """FastAPI's default RequestValidationError body leaks pydantic detail
+    shape that doesn't match our envelope. The handler reshapes it while
+    keeping the canonical 422 status for semantic validation failures."""
     resp = client.get("/validation/not-a-number")
-    assert resp.status_code == 400
+    assert resp.status_code == 422
     body = resp.json()
     assert body["error"]["code"] == "VALIDATION_ERROR"
     assert "message" in body["error"]
@@ -160,7 +161,7 @@ def test_validation_error_message_concatenates_all_fields():
     # Both query params violate ge=1 at the same time — handler must surface
     # both, not just the first.
     resp = c.get("/multi?alpha=0&beta=0")
-    assert resp.status_code == 400
+    assert resp.status_code == 422
     message = resp.json()["error"]["message"]
     assert "alpha" in message
     assert "beta" in message
