@@ -1,0 +1,50 @@
+# qb-service — Project Context
+
+## Project Overview
+FastAPI service that fronts the QuickBooks Online REST API for the Martin Water Labs Lab Intake web app. Owns Intuit OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. Holds **no business data** — every request hits QBO live. Forked from `quickbooks-cli` (sibling repo).
+
+Single QBO realm (Martin Water Labs). Deployed to Cloud Run with IAM-based auth for callers.
+
+## Full design rationale
+See [`docs/qb-service-scope.md`](docs/qb-service-scope.md) — that doc is the source of truth for the architecture, HTTP surface, auth model, and phased delivery plan.
+
+## Running locally
+- `uv sync` to install dependencies.
+- `uv run uvicorn qbsvc.main:app --reload --port 8080` to start the server.
+- `curl http://localhost:8080/healthz` to smoke-check.
+
+## Package Layout
+Src layout: `src/qbsvc/`. Build backend: setuptools.
+
+### Key Files (current — Phase 0)
+- `src/qbsvc/main.py` — FastAPI app factory, route registration
+- `src/qbsvc/config.py` — pydantic-settings, env vars prefixed `QBSVC_`
+- `src/qbsvc/exceptions.py` — `APIError`, `AuthError`, `RateLimitError`
+- `src/qbsvc/api/client.py` — httpx QBO client (ported from CLI; needs token-store decoupling in Phase 1)
+- `src/qbsvc/api/pagination.py` — STARTPOSITION/MAXRESULTS pagination helper
+- `src/qbsvc/api/queries.py` — QBO SQL query builder
+- `src/qbsvc/auth/oauth.py` — Intuit OAuth flow (Phase 1: replace localhost callback with FastAPI routes)
+- `src/qbsvc/auth/token_store.py` — keyring/file token storage (Phase 1: replace with `TokenStore` protocol + Secret Manager backend)
+- `src/qbsvc/routes/health.py` — `/healthz`, `/readyz`
+
+## QuickBooks Online API Notes
+- REST API at `https://quickbooks.api.intuit.com/v3/company/{realmId}/`
+- SQL-like query language: `SELECT * FROM Customer WHERE Active = true`
+- Pagination via `STARTPOSITION` and `MAXRESULTS` (1-based indexing)
+- Auth via Intuit OAuth 2.0 — token endpoint uses HTTP Basic Auth (client_id:client_secret)
+- Realm ID (company ID) comes from the OAuth callback's `realmId` param
+- Minor version query param: `?minorversion=75`
+- Errors in `Fault.Error[]` array with `Detail` and `Message` fields
+- Rate limit: 500 requests/minute per realm
+- Scope: `com.intuit.quickbooks.accounting` (read/write)
+- **Refresh tokens rotate on every refresh** — the new value must be persisted, or the next cold start dies
+
+## Implementation Status
+- Phase 0: Bootstrap scaffold ✅
+- Phase 1: Token plumbing + `/admin/oauth/*` (pending)
+- Phase 2: Read endpoints (pending)
+- Phase 3: Write endpoints (pending)
+- Phase 4: Hardening + Cloud Run deploy (pending)
+
+## Related projects
+- `quickbooks-cli` at `../quickbooks-cli` — the laptop CLI this service was forked from. Different use case; keeps its own independent OAuth setup and adds payments/estimates/vendors/bills/P&L commands the service does not.
