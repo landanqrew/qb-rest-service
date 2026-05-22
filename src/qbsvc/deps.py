@@ -6,6 +6,7 @@ from typing import Any, Iterator
 from fastapi import Depends
 
 from qbsvc.api.client import QBClient
+from qbsvc.api.rate_limit import TokenBucket
 from qbsvc.auth.oauth_state import OAuthStateStore
 from qbsvc.auth.secret_manager import SecretManagerTokenStore
 from qbsvc.auth.tokens import FileTokenStore, TokenStore
@@ -58,6 +59,25 @@ def reset_oauth_state_store_cache() -> None:
     _oauth_state_store.cache_clear()
 
 
+@lru_cache
+def _qbo_rate_limiter(per_min: int, burst: int) -> TokenBucket:
+    """Process-wide token bucket so concurrent QBClient instances share one
+    bucket. Without memoization each request would get its own bucket and
+    the limit wouldn't constrain anything."""
+    return TokenBucket(rate_per_sec=per_min / 60.0, capacity=burst)
+
+
+def reset_rate_limiter_cache() -> None:
+    """Clear the memoized rate limiter. For tests only."""
+    _qbo_rate_limiter.cache_clear()
+
+
+def get_qbo_rate_limiter(
+    settings: Settings = Depends(get_settings),
+) -> TokenBucket:
+    return _qbo_rate_limiter(settings.rate_limit_per_min, settings.rate_limit_burst)
+
+
 def get_oauth_state_store(
     settings: Settings = Depends(get_settings),
 ) -> OAuthStateStore:
@@ -84,8 +104,13 @@ def get_token_store(settings: Settings = Depends(get_settings)) -> TokenStore:
 def get_qb_client(
     token_store: TokenStore = Depends(get_token_store),
     settings: Settings = Depends(get_settings),
+    rate_limiter: TokenBucket = Depends(get_qbo_rate_limiter),
 ) -> Iterator[QBClient]:
-    client = QBClient(token_store=token_store, settings=settings)
+    client = QBClient(
+        token_store=token_store,
+        settings=settings,
+        rate_limiter=rate_limiter,
+    )
     try:
         yield client
     finally:

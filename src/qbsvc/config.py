@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     oauth_redirect_uri: str = Field(default="")
     oauth_state_ttl_seconds: int = Field(default=600, gt=0)
 
+    # Outbound rate limit toward QBO. Defaults fail fast at 480/min with a
+    # 16-burst, well under QBO's documented 500/min/realm ceiling so we
+    # never see Intuit's own 429 under normal load.
+    rate_limit_per_min: int = Field(default=480, gt=0)
+    rate_limit_burst: int = Field(default=16, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:
