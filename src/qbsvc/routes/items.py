@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
+
+from qbsvc.api.client import QBClient
+from qbsvc.deps import get_qb_client
+from qbsvc.routes._common import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    get_entity_detail,
+    list_entity,
+)
+
+router = APIRouter(prefix="/items", tags=["items"])
+
+
+@router.get("")
+def list_items(
+    client: Annotated[QBClient, Depends(get_qb_client)],
+    active: Annotated[bool, Query()] = True,
+    modified_since: Annotated[
+        str | None,
+        Query(description="ISO date, e.g. 2026-01-01"),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query()] = None,
+) -> JSONResponse:
+    return list_entity(
+        client,
+        entity="Item",
+        active=active,
+        modified_since=modified_since,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@router.get("/{item_id}")
+def get_item(
+    item_id: str,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    return get_entity_detail(client, entity="Item", entity_id=item_id)
