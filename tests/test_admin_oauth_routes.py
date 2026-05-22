@@ -87,7 +87,21 @@ def test_start_state_is_stored_for_callback_validation(client, state_store):
 
 
 def test_start_returns_500_when_oauth_not_configured(monkeypatch, state_store):
-    # No client_id / no redirect_uri set.
+    # No client_id / no client_secret / no redirect_uri set.
+    get_settings.cache_clear()
+    app = create_app()
+    app.dependency_overrides[get_oauth_state_store] = lambda: state_store
+    c = TestClient(app, follow_redirects=False)
+    resp = c.get("/admin/oauth/start")
+    assert resp.status_code == 500
+
+
+def test_start_returns_500_when_client_secret_missing(monkeypatch, state_store):
+    # client_id + redirect_uri set, secret missing — caught before sending the
+    # user through the Intuit consent screen.
+    monkeypatch.setenv("QBSVC_INTUIT_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("QBSVC_OAUTH_REDIRECT_URI", REDIRECT_URI)
+    monkeypatch.delenv("QBSVC_INTUIT_CLIENT_SECRET", raising=False)
     get_settings.cache_clear()
     app = create_app()
     app.dependency_overrides[get_oauth_state_store] = lambda: state_store
@@ -189,6 +203,40 @@ def test_callback_intuit_error_returns_400(client, state_store, monkeypatch):
     assert "access_denied" in resp.text
 
 
+def test_callback_intuit_error_does_not_consume_state(
+    client, state_store, monkeypatch
+):
+    """Operator must be able to retry from the same /start link if Intuit
+    returns an error — so the state token survives error responses."""
+    state = state_store.create()
+    monkeypatch.setattr(
+        "qbsvc.auth.oauth.httpx.post",
+        lambda *a, **k: pytest.fail("token exchange should not be called"),
+    )
+    first = client.get(
+        "/admin/oauth/callback",
+        params={"state": state, "error": "access_denied"},
+    )
+    assert first.status_code == 400
+    # State should still be valid for a retry.
+    assert state_store.consume(state) is True
+
+
+def test_callback_escapes_error_param(client, state_store, monkeypatch):
+    state = state_store.create()
+    monkeypatch.setattr(
+        "qbsvc.auth.oauth.httpx.post",
+        lambda *a, **k: pytest.fail("token exchange should not be called"),
+    )
+    resp = client.get(
+        "/admin/oauth/callback",
+        params={"state": state, "error": "<script>alert(1)</script>"},
+    )
+    assert resp.status_code == 400
+    assert "<script>" not in resp.text
+    assert "&lt;script&gt;" in resp.text
+
+
 def test_callback_missing_code_returns_400(client, state_store):
     state = state_store.create()
     resp = client.get(
@@ -252,6 +300,56 @@ def test_callback_token_exchange_failure_returns_502(
     assert resp.status_code == 502
     # Token store untouched.
     assert token_store.load() is None
+
+
+def test_callback_token_store_save_failure_returns_500(
+    settings_env, state_store, monkeypatch
+):
+    """If persistence fails after Intuit has rotated the refresh token, the
+    operator needs a loud, specific error — not a stack trace."""
+    from qbsvc.exceptions import TokenStoreError
+
+    class FailingTokenStore:
+        def load(self):
+            return None
+
+        def save(self, tokens):
+            raise TokenStoreError("Secret Manager unreachable: 503")
+
+    failing_store = FailingTokenStore()
+    app = create_app()
+    app.dependency_overrides[get_oauth_state_store] = lambda: state_store
+    app.dependency_overrides[get_token_store] = lambda: failing_store
+    c = TestClient(app, follow_redirects=False)
+
+    state = state_store.create()
+    _mock_token_response(monkeypatch)
+
+    resp = c.get(
+        "/admin/oauth/callback",
+        params={"code": "x", "realmId": "1", "state": state},
+    )
+    assert resp.status_code == 500
+    assert "FAILED TO SAVE" in resp.text
+    assert "re-authorize" in resp.text.lower()
+
+
+def test_callback_escapes_realm_id_in_success_response(
+    client, state_store, monkeypatch
+):
+    state = state_store.create()
+    _mock_token_response(monkeypatch)
+    resp = client.get(
+        "/admin/oauth/callback",
+        params={
+            "code": "x",
+            "realmId": "<script>alert(1)</script>",
+            "state": state,
+        },
+    )
+    assert resp.status_code == 200
+    assert "<script>" not in resp.text
+    assert "&lt;script&gt;" in resp.text
 
 
 def test_state_store_dependency_is_memoized():

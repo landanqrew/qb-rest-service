@@ -39,10 +39,10 @@ class OAuthStateStore:
             issued = self._states.pop(state, None)
         if issued is None:
             return False
-        return (now - issued) <= self.ttl_seconds
+        return (now - issued) < self.ttl_seconds
 
     def _purge_expired_locked(self, now: float) -> None:
         cutoff = now - self.ttl_seconds
-        expired = [s for s, t in self._states.items() if t < cutoff]
+        expired = [s for s, t in self._states.items() if t <= cutoff]
         for s in expired:
             del self._states[s]
