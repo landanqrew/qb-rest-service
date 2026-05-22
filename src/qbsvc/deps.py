@@ -6,6 +6,7 @@ from typing import Any, Iterator
 from fastapi import Depends
 
 from qbsvc.api.client import QBClient
+from qbsvc.auth.oauth_state import OAuthStateStore
 from qbsvc.auth.secret_manager import SecretManagerTokenStore
 from qbsvc.auth.tokens import FileTokenStore, TokenStore
 from qbsvc.config import Settings, get_settings
@@ -45,6 +46,24 @@ def reset_token_store_cache() -> None:
     _file_token_store.cache_clear()
     _secret_manager_token_store.cache_clear()
     _build_secret_manager_client.cache_clear()
+
+
+@lru_cache
+def _oauth_state_store(ttl_seconds: int) -> OAuthStateStore:
+    return OAuthStateStore(ttl_seconds=ttl_seconds)
+
+
+def reset_oauth_state_store_cache() -> None:
+    """Clear the memoized OAuth state store. For tests only."""
+    _oauth_state_store.cache_clear()
+
+
+def get_oauth_state_store(
+    settings: Settings = Depends(get_settings),
+) -> OAuthStateStore:
+    """Process-wide state store so /admin/oauth/start and /callback
+    share entries across requests."""
+    return _oauth_state_store(settings.oauth_state_ttl_seconds)
 
 
 def get_token_store(settings: Settings = Depends(get_settings)) -> TokenStore:

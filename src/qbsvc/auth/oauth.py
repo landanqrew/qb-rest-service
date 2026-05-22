@@ -20,6 +20,44 @@ REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 SCOPES = "com.intuit.quickbooks.accounting"
 
 
+def build_authorize_url(client_id: str, state: str, redirect_uri: str) -> str:
+    """Build the Intuit consent-screen URL the operator's browser is sent to."""
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "scope": SCOPES,
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+    return f"{AUTHORIZE_URL}?{urlencode(params)}"
+
+
+def exchange_code(
+    settings: Settings, code: str, realm_id: str, redirect_uri: str
+) -> TokenData:
+    """Exchange an Intuit authorization code for tokens.
+
+    The `redirect_uri` must match exactly what was sent to `/connect/oauth2`
+    in the authorize step — Intuit rejects the exchange otherwise.
+    """
+    _require_creds(settings)
+
+    resp = httpx.post(
+        TOKEN_URL,
+        auth=(settings.intuit_client_id, settings.intuit_client_secret),
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+    )
+
+    if resp.status_code != 200:
+        raise AuthError(f"Token exchange failed ({resp.status_code}): {resp.text}")
+
+    return _parse_token_response(resp.json(), realm_id)
+
+
 def _require_creds(settings: Settings) -> None:
     missing = [
         name
@@ -78,14 +116,11 @@ def login(settings: Settings, store: TokenStore) -> TokenData:
         def log_message(self, format, *args):
             pass
 
-    params = {
-        "client_id": settings.intuit_client_id,
-        "response_type": "code",
-        "scope": SCOPES,
-        "redirect_uri": REDIRECT_URI,
-        "state": state,
-    }
-    auth_url = f"{AUTHORIZE_URL}?{urlencode(params)}"
+    auth_url = build_authorize_url(
+        client_id=settings.intuit_client_id,
+        state=state,
+        redirect_uri=REDIRECT_URI,
+    )
 
     server = HTTPServer(("localhost", REDIRECT_PORT), CallbackHandler)
     server.timeout = 120
@@ -104,7 +139,7 @@ def login(settings: Settings, store: TokenStore) -> TokenData:
     if not realm_id:
         raise AuthError("No realm ID (company ID) received from Intuit.")
 
-    tokens = _exchange_code(settings, auth_code, realm_id)
+    tokens = exchange_code(settings, auth_code, realm_id, REDIRECT_URI)
     store.save(tokens)
     return tokens
 
@@ -133,24 +168,6 @@ def refresh(
     tokens = _parse_token_response(resp.json(), realm_id)
     store.save(tokens)
     return tokens
-
-
-def _exchange_code(settings: Settings, code: str, realm_id: str) -> TokenData:
-    """Exchange authorization code for tokens."""
-    resp = httpx.post(
-        TOKEN_URL,
-        auth=(settings.intuit_client_id, settings.intuit_client_secret),
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": REDIRECT_URI,
-        },
-    )
-
-    if resp.status_code != 200:
-        raise AuthError(f"Token exchange failed ({resp.status_code}): {resp.text}")
-
-    return _parse_token_response(resp.json(), realm_id)
 
 
 def _parse_token_response(data: dict, realm_id: str) -> TokenData:

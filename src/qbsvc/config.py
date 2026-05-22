@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     secret_name_tokens: str = Field(default="mwl-qb-tokens")
     secret_name_client: str = Field(default="mwl-qb-client")
 
+    # Full URL Intuit redirects to after consent. Must be registered in the
+    # Intuit developer console and match what /admin/oauth/start sends.
+    oauth_redirect_uri: str = Field(default="")
+    oauth_state_ttl_seconds: int = Field(default=600, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:
