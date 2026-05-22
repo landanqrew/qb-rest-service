@@ -71,3 +71,20 @@ def test_query_returns_empty_list_when_entity_absent(primed_client):
     client = primed_client(handler)
     rows = client.query("SELECT * FROM Customer WHERE Active = true")
     assert rows == []
+
+
+def test_query_entity_lookup_is_case_insensitive(primed_client):
+    """QBO response keys are PascalCase; the SQL `FROM` clause should not
+    have to match that exact casing for the lookup to find the rows.
+    Guards against a subtle silent-empty bug in future routes.
+    """
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"QueryResponse": {"Customer": [{"Id": "1"}], "maxResults": 1}},
+        )
+
+    client = primed_client(handler)
+    rows = client.query("select * from customer where Active = true")
+    assert rows == [{"Id": "1"}]

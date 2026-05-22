@@ -60,8 +60,14 @@ class QBClient:
         if entity is None:
             return []
 
-        rows = query_response.get(entity, [])
-        return rows if isinstance(rows, list) else []
+        # QBO response keys are always PascalCase (e.g. "Customer"). Match
+        # case-insensitively so a lowercase `from customer` in the SQL still
+        # resolves to the right list instead of silently returning [].
+        target = entity.lower()
+        for key, value in query_response.items():
+            if key.lower() == target and isinstance(value, list):
+                return value
+        return []
 
     def ensure_ready(self) -> None:
         """Verify auth is usable: load tokens and refresh if expired.
