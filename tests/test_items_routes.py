@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from qbsvc.api.client import QBClient
 from qbsvc.auth.tokens import FileTokenStore, TokenData
 from qbsvc.config import get_settings
+from qbsvc.exceptions import TokenStoreError
 from qbsvc.deps import (
     get_qb_client,
     reset_token_store_cache,
@@ -902,3 +904,155 @@ def test_delete_rate_limited_returns_429(settings_env, token_store):
     resp = client.delete("/v1/items/42")
     assert resp.status_code == 429
     assert resp.json()["error"]["code"] == "RATE_LIMITED"
+
+
+# ---------- token-store backend failure (503) on the write routes ----------
+
+
+class _RaisingTokenStore:
+    """A TokenStore whose backend blows up on load — e.g. Secret Manager is
+    unreachable. The routes must surface this as 503 TOKEN_STORE_FAILED,
+    distinct from the NOT_AUTHENTICATED (missing tokens) case.
+    """
+
+    def __init__(self) -> None:
+        self.refresh_lock = threading.Lock()
+
+    def load(self) -> TokenData | None:
+        raise TokenStoreError("secret manager unavailable")
+
+    def save(self, data: TokenData) -> None:  # pragma: no cover - never reached
+        raise TokenStoreError("secret manager unavailable")
+
+
+def test_create_token_store_failure_returns_503(settings_env):
+    def handler(request):
+        pytest.fail("QBO must not be hit when the token store is unavailable")
+
+    client, _ = _make_client(_RaisingTokenStore(), handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "TOKEN_STORE_FAILED"
+
+
+def test_update_token_store_failure_returns_503(settings_env):
+    def handler(request):
+        pytest.fail("QBO must not be hit when the token store is unavailable")
+
+    client, _ = _make_client(_RaisingTokenStore(), handler)
+    resp = client.put("/v1/items/42", json={"name": "Renamed"})
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "TOKEN_STORE_FAILED"
+
+
+def test_delete_token_store_failure_returns_503(settings_env):
+    def handler(request):
+        pytest.fail("QBO must not be hit when the token store is unavailable")
+
+    client, _ = _make_client(_RaisingTokenStore(), handler)
+    resp = client.delete("/v1/items/42")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "TOKEN_STORE_FAILED"
+
+
+# ---------- Inventory type (QBO requires extra account/quantity fields) ----------
+
+
+def _inventory_payload(**overrides) -> dict:
+    base = {
+        "name": "Chlorine Reagent",
+        "type": "Inventory",
+        "income_account_id": "79",
+        "expense_account_id": "80",
+        "asset_account_id": "81",
+        "qty_on_hand": 100,
+        "inv_start_date": "2026-06-01",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_create_inventory_maps_all_required_fields(settings_env, token_store):
+    """An Inventory create must carry IncomeAccountRef, ExpenseAccountRef,
+    AssetAccountRef, QtyOnHand, InvStartDate, and TrackQtyOnHand to QBO.
+    """
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["Type"] == "Inventory"
+        assert body["IncomeAccountRef"] == {"value": "79"}
+        assert body["ExpenseAccountRef"] == {"value": "80"}
+        assert body["AssetAccountRef"] == {"value": "81"}
+        assert body["QtyOnHand"] == 100
+        assert body["InvStartDate"] == "2026-06-01"
+        assert body["TrackQtyOnHand"] is True
+        return _post_response(_item("99", Type="Inventory"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/items", json=_inventory_payload())
+    assert resp.status_code == 201
+
+
+def test_create_inventory_missing_required_fields_returns_422(settings_env, token_store):
+    """Inventory without the QBO-required extra fields fails as a clean 422
+    rather than round-tripping to an opaque 502.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when Inventory fields are missing")
+
+    client, _ = _make_client(token_store, handler)
+    # Only the base Service-shaped body — missing expense/asset/qty/date.
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Chlorine Reagent", "type": "Inventory", "income_account_id": "79"},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_inventory_bad_start_date_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when inv_start_date is malformed")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/items", json=_inventory_payload(inv_start_date="06/01/2026"))
+    assert resp.status_code == 422
+
+
+def test_create_service_with_inventory_fields_returns_422(settings_env, token_store):
+    """Inventory-only fields on a Service item are rejected so a COGS account
+    can't be silently attached to the wrong item type.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when Inventory fields are misused")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={
+            "name": "Coliform Test",
+            "type": "Service",
+            "income_account_id": "79",
+            "asset_account_id": "81",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_update_can_repoint_account_refs(settings_env, token_store):
+    """A sparse update can re-point the expense/asset accounts of an item."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        body = json.loads(request.content)
+        assert body["ExpenseAccountRef"] == {"value": "90"}
+        assert body["AssetAccountRef"] == {"value": "91"}
+        return _post_response(_item("42"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/items/42",
+        json={"expense_account_id": "90", "asset_account_id": "91"},
+    )
+    assert resp.status_code == 200

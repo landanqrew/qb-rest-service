@@ -17,6 +17,7 @@ from qbsvc.routes._common import (
     get_entity_detail,
     is_not_found,
     list_entity,
+    parse_iso_date,
 )
 from qbsvc.schemas import DetailResponse
 
@@ -112,6 +113,54 @@ class ItemCreate(BaseModel):
     income_account_id: str = Field(min_length=1)
     unit_price: float | None = None
 
+    # Inventory-only fields. QBO requires an expense (COGS) account, an asset
+    # account, an opening quantity, and an opening date for Type="Inventory";
+    # they're optional here and enforced for Inventory by the validator below.
+    # Service / NonInventory items leave them unset.
+    expense_account_id: str | None = Field(default=None, min_length=1)
+    asset_account_id: str | None = Field(default=None, min_length=1)
+    qty_on_hand: float | None = None
+    inv_start_date: str | None = None
+
+    @model_validator(mode="after")
+    def _inventory_requires_extra_fields(self) -> "ItemCreate":
+        if self.type == "Inventory":
+            missing = [
+                name
+                for name, value in (
+                    ("expense_account_id", self.expense_account_id),
+                    ("asset_account_id", self.asset_account_id),
+                    ("qty_on_hand", self.qty_on_hand),
+                    ("inv_start_date", self.inv_start_date),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    "Inventory items require "
+                    + ", ".join(missing)
+                    + " (QBO mandates a COGS/asset account, opening quantity, "
+                    "and opening date for Type=Inventory)"
+                )
+        # These fields only make sense for Inventory; reject them elsewhere so
+        # callers don't silently send a COGS account on a Service item.
+        elif any(
+            value is not None
+            for value in (
+                self.expense_account_id,
+                self.asset_account_id,
+                self.qty_on_hand,
+                self.inv_start_date,
+            )
+        ):
+            raise ValueError(
+                "expense_account_id / asset_account_id / qty_on_hand / "
+                "inv_start_date are only valid when type is Inventory"
+            )
+        if self.inv_start_date is not None and parse_iso_date(self.inv_start_date) is None:
+            raise ValueError("inv_start_date must be a calendar date in YYYY-MM-DD format")
+        return self
+
 
 class ItemUpdate(BaseModel):
     """Request body for `PUT /v1/items/{id}` — a SyncToken-aware sparse update.
@@ -127,6 +176,10 @@ class ItemUpdate(BaseModel):
     type: ItemType | None = None
     income_account_id: str | None = Field(default=None, min_length=1)
     unit_price: float | None = None
+    # The COGS / asset accounts on an existing Inventory item can be re-pointed
+    # via a sparse update; opening quantity/date are create-time and omitted.
+    expense_account_id: str | None = Field(default=None, min_length=1)
+    asset_account_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> "ItemUpdate":
@@ -137,6 +190,8 @@ class ItemUpdate(BaseModel):
                 self.type,
                 self.income_account_id,
                 self.unit_price,
+                self.expense_account_id,
+                self.asset_account_id,
             )
         ):
             raise ValueError("at least one field must be provided for a sparse update")
@@ -151,6 +206,13 @@ def _create_to_qbo_body(payload: ItemCreate) -> dict[str, Any]:
     }
     if payload.unit_price is not None:
         body["UnitPrice"] = payload.unit_price
+    if payload.type == "Inventory":
+        # The validator guarantees these are all present for Inventory.
+        body["TrackQtyOnHand"] = True
+        body["ExpenseAccountRef"] = {"value": payload.expense_account_id}
+        body["AssetAccountRef"] = {"value": payload.asset_account_id}
+        body["QtyOnHand"] = payload.qty_on_hand
+        body["InvStartDate"] = payload.inv_start_date
     return body
 
 
@@ -164,6 +226,10 @@ def _update_to_qbo_fields(payload: ItemUpdate) -> dict[str, Any]:
         fields["IncomeAccountRef"] = {"value": payload.income_account_id}
     if payload.unit_price is not None:
         fields["UnitPrice"] = payload.unit_price
+    if payload.expense_account_id is not None:
+        fields["ExpenseAccountRef"] = {"value": payload.expense_account_id}
+    if payload.asset_account_id is not None:
+        fields["AssetAccountRef"] = {"value": payload.asset_account_id}
     return fields
 
 
