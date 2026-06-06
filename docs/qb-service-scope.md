@@ -1,6 +1,6 @@
 # QB Service — Project Scope (Option B)
 
-**Status:** Draft for review · 2026-05-21 · Amended 2026-06-06 (Amendment 1: full CRUD surface — see amendment log)
+**Status:** Draft for review · 2026-05-21 · Amended 2026-06-06 (Amendment 1: full CRUD surface; Amendment 2: public pages service for Intuit production requirements — see amendment log)
 **Decision:** Locked on Option B (thin stateless REST proxy in front of QBO)
 **Repo plan:** Clone `quickbooks-cli` → new repo (working name `qb-service`). CLI stays where it is.
 
@@ -243,6 +243,14 @@ QBO limit: **500 req/min per realm**. With one realm and one consumer, unlikely 
 - Concurrency: 80 (default) is fine; QBO calls are I/O bound.
 - Deploy via `gcloud run deploy` initially; promote to GitHub Actions once stable.
 
+### Companion public pages service *(Amendment 2)*
+
+Intuit production keys require publicly resolvable URLs for the app's landing page, EULA, and privacy policy. qb-service is IAM-locked at the edge (`--no-allow-unauthenticated`), so those pages cannot live on it. Instead, a second, minimal Cloud Run service (`qb-pages`, working name) hosts them:
+
+- Static HTML only (`/`, `/eula`, `/privacy`) — no QBO access, no secrets, no service account permissions, no network path to qb-service.
+- Lives in this repo under `web/`; its own Dockerfile (static file server) and deploy config under `deploy/`.
+- Deployed `--allow-unauthenticated`. Its only job is satisfying Intuit's app-deployment constraints; it is not part of the API surface.
+
 ## 15. Phased delivery
 
 | Phase | Scope | Exit criteria |
@@ -253,6 +261,7 @@ QBO limit: **500 req/min per realm**. With one realm and one consumer, unlikely 
 | **3 — Write endpoints** | `POST /invoices`, `POST /invoices/{id}/lines` | Test invoice round-trips through sandbox + prod realm |
 | **3b — Extended writes** *(Amendment 1)* | `POST/PUT/DELETE /items/*`, `PUT/DELETE /invoices/{id}`, `POST /invoices/{id}/void`, `PUT/DELETE /invoices/{id}/lines/{line_id}` | Item lifecycle + invoice edit/void/delete round-trip through sandbox |
 | **4 — Hardening** | Structured logging, error envelope, rate limiter, IAM lockdown, observability | Ready for Lab Intake web app to depend on it |
+| **4b — Production launch** *(Amendment 2)* | `qb-pages` public pages service; deploy both services to Cloud Run; Intuit app production keys + redirect URIs; OAuth bootstrap against the prod realm | `GET /v1/customers` works end-to-end against the production MWL realm |
 | **5 — Web app integration** | (Other repo) | Phase 3 of the Lab Intake diagram works end-to-end |
 
 Estimate: Phases 0–4 are roughly a week of focused work for one person, gated on Cloud Run + Secret Manager being set up.
@@ -288,6 +297,16 @@ QBO constraints that shaped the route semantics:
 - **Items cannot be hard-deleted.** The API only supports `Active: false`. `DELETE /items/{id}` is therefore a deactivation; QBO appends "(deleted)" to the name of deactivated items it must disambiguate.
 - **Invoice delete removes the transaction.** QBO `operation=void` is the audit-friendly alternative (record survives at $0). We expose both — `DELETE /invoices/{id}` and `POST /invoices/{id}/void` — and let the web app pick; the unused route is cheap to drop later (§16 #7).
 - **No per-line API.** QBO has no line-item endpoints; updating or removing a line means a full update of the parent invoice (read current state, modify the `Line[]` array, write back with the fresh `SyncToken`). The `/invoices/{id}/lines/{line_id}` routes wrap that read-modify-write so the web app doesn't reimplement QBO's full-update semantics. `line_id` is QBO's stable `Line.Id` within the invoice.
+
+### Amendment 2 — 2026-06-06: public pages service + production launch phase
+
+Intuit requires a publicly reachable landing page, EULA URL, and privacy policy URL before issuing production keys for a developer app. qb-service rejects unauthenticated requests at the Cloud Run edge by design (§7), so it cannot host those pages itself. Options considered:
+
+- ~~Open qb-service to `allUsers` and gate in-app~~ — contradicts the §7 edge-IAM design.
+- ~~Static host outside GCP (e.g. GitHub Pages)~~ — viable, but splits deploy surface across providers.
+- **Chosen:** a second, minimal public Cloud Run service (`qb-pages`) serving only static pages (§14). No secrets, no QBO access; blast radius of "public" is three HTML files.
+
+Also adds Phase 4b (§15) covering the launch sequence: pages service → deploy both services → Intuit production keys → OAuth bootstrap against the prod realm.
 
 ## Review checklist
 
