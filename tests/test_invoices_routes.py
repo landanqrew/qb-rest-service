@@ -1469,17 +1469,19 @@ def test_delete_line_sends_sparse_update_without_target(settings_env, token_stor
     assert resp.status_code == 200
 
 
-def test_delete_last_line_returns_4xx_not_502(settings_env, token_store):
+def test_delete_last_line_returns_409_not_502(settings_env, token_store):
     """Acceptance: deleting the last remaining line returns a clear 4xx, not a
-    QBO 502 pass-through. The write (POST) must not fire — we catch it before
-    QBO would reject the empty Line array."""
+    QBO 502 pass-through. Pin the exact 409 + CANNOT_DELETE_LAST_LINE contract
+    so a regression off it can't slip through a loose status range. The write
+    (POST) must not fire — we catch it before QBO would reject the empty Line
+    array."""
     def handler(request):
         assert request.method == "GET"  # must short-circuit before the POST
         return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
 
     client, _ = _make_client(token_store, handler)
     resp = client.delete("/v1/invoices/42/lines/1")
-    assert 400 <= resp.status_code < 500
+    assert resp.status_code == 409
     body = resp.json()
     assert body["error"]["code"] == "CANNOT_DELETE_LAST_LINE"
     assert "1" in body["error"]["message"]

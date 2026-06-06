@@ -361,8 +361,8 @@ def _load_invoice_for_edit(
 def _write_invoice_lines(
     client: QBClient,
     invoice_id: str,
-    invoice_id_val: Any,
-    sync_token_val: Any,
+    invoice_id_val: str,
+    sync_token_val: str,
     new_lines: list[dict[str, Any]],
 ) -> JSONResponse:
     """Sparse-update the invoice's `Line[]` and return the standard envelope.
@@ -430,10 +430,14 @@ def append_invoice_line(
     # mutate, and write back in one round-trip.
     invoice, err = _load_invoice_for_edit(client, invoice_id)
     if invoice is None:
+        # `_load_invoice_for_edit` only returns invoice=None alongside a
+        # populated error envelope; assert it so type-checkers can see the
+        # `return err` below never leaks a None response.
+        assert err is not None
         return err
 
     existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
-    new_lines = existing_lines + [_append_line_to_qbo(payload)]
+    new_lines = [*existing_lines, _append_line_to_qbo(payload)]
     return _write_invoice_lines(
         client, invoice_id, invoice["Id"], invoice["SyncToken"], new_lines
     )
@@ -461,9 +465,13 @@ def _validate_invoice_and_line_ids(
 
 def _find_line_index(lines: list[dict[str, Any]], line_id: str) -> int | None:
     """Index of the line whose `Line.Id` equals `line_id`, or None. QBO stores
-    Id as a string but we compare stringwise to be robust to either shape."""
+    Id as a string but we compare stringwise to be robust to either shape.
+    Lines without an Id (e.g. the SubTotal row) are skipped explicitly rather
+    than coerced to the string "None", which would falsely match line_id="None"
+    if this helper is ever reused without the `_LINE_ID_RE` digit guard."""
     for index, line in enumerate(lines):
-        if str(line.get("Id")) == line_id:
+        existing_id = line.get("Id")
+        if existing_id is not None and str(existing_id) == line_id:
             return index
     return None
 
@@ -496,6 +504,10 @@ def update_invoice_line(
 
     invoice, err = _load_invoice_for_edit(client, invoice_id)
     if invoice is None:
+        # `_load_invoice_for_edit` only returns invoice=None alongside a
+        # populated error envelope; assert it so type-checkers can see the
+        # `return err` below never leaks a None response.
+        assert err is not None
         return err
 
     existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
@@ -528,6 +540,10 @@ def delete_invoice_line(
 
     invoice, err = _load_invoice_for_edit(client, invoice_id)
     if invoice is None:
+        # `_load_invoice_for_edit` only returns invoice=None alongside a
+        # populated error envelope; assert it so type-checkers can see the
+        # `return err` below never leaks a None response.
+        assert err is not None
         return err
 
     existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
