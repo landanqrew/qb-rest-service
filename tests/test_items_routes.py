@@ -819,3 +819,86 @@ def test_delete_invalid_id_returns_400(settings_env, token_store):
     resp = client.delete("/v1/items/not-a-number")
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "INVALID_PARAM"
+
+
+def test_delete_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.delete("/v1/items/42")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- empty-string ref guard (clean 422, not an opaque 502) ----------
+
+
+def test_create_empty_income_account_id_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when income_account_id is empty")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": ""},
+    )
+    assert resp.status_code == 422
+
+
+def test_update_empty_income_account_id_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when income_account_id is empty")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"income_account_id": ""})
+    assert resp.status_code == 422
+
+
+# ---------- rate-limit (429) on the write routes ----------
+
+
+def _rate_limited_response() -> httpx.Response:
+    # Retry-After: 0 keeps the client's single retry from actually sleeping;
+    # a second 429 then trips QBClient into raising RateLimitError, which the
+    # routes surface as 429 RATE_LIMITED.
+    return httpx.Response(429, headers={"Retry-After": "0"}, json={})
+
+
+def test_create_rate_limited_returns_429(settings_env, token_store):
+    def handler(request):
+        return _rate_limited_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_update_rate_limited_returns_429(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        return _rate_limited_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"name": "Renamed"})
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_delete_rate_limited_returns_429(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        return _rate_limited_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/items/42")
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "RATE_LIMITED"

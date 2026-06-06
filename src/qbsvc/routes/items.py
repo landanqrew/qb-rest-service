@@ -106,7 +106,10 @@ class ItemCreate(BaseModel):
     # callers see a 422 with the field name instead of an opaque 502 from QBO.
     name: str = Field(min_length=1, max_length=100)
     type: ItemType
-    income_account_id: str
+    # min_length=1 so an empty id fails as a clean 422 here instead of
+    # round-tripping to QBO as IncomeAccountRef:{"value": ""} and coming back
+    # as an opaque 502.
+    income_account_id: str = Field(min_length=1)
     unit_price: float | None = None
 
 
@@ -122,7 +125,7 @@ class ItemUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
     type: ItemType | None = None
-    income_account_id: str | None = None
+    income_account_id: str | None = Field(default=None, min_length=1)
     unit_price: float | None = None
 
     @model_validator(mode="after")
@@ -258,11 +261,14 @@ def _post_sparse_item(
         return error_response("RATE_LIMITED", str(exc), 429)
     except APIError as exc:
         if _has_fault_code(exc, _STALE_SYNC_TOKEN_CODE):
+            # Operation-neutral wording: this helper backs both PUT (update)
+            # and DELETE (deactivate), so the message must read correctly for
+            # either caller.
             return error_response(
                 "QBO_STALE_SYNC_TOKEN",
                 (
                     f"Item {item_id} was modified by another writer; "
-                    "re-fetch and retry the update"
+                    "re-fetch and retry"
                 ),
                 409,
                 qbo_detail=exc.detail,
@@ -270,7 +276,7 @@ def _post_sparse_item(
         if _has_fault_code(exc, _DUPLICATE_NAME_CODE):
             return error_response(
                 "QBO_DUPLICATE_NAME",
-                f"An item with that name already exists (updating {item_id})",
+                f"An item with that name already exists (item {item_id})",
                 409,
                 qbo_detail=exc.detail,
             )
