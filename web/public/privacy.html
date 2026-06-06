@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — Martin Water Labs QuickBooks Integration</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="kicker">Martin Water Labs</p>
+      <h1>Privacy Policy</h1>
+    </header>
+
+    <!-- TODO(#36): review before Intuit submission, then remove this banner. -->
+    <p class="draft-banner">
+      <strong>DRAFT</strong> — pending review by Martin Water Labs. Not yet in
+      effect.
+    </p>
+
+    <p>
+      This policy describes how the Martin Water Labs QuickBooks Integration
+      (the &ldquo;Service&rdquo;) and this website handle data. The Service is
+      an internal tool operated by Martin Water Labs (&ldquo;MWL&rdquo;) for
+      its own business; it is not offered to the public.
+    </p>
+
+    <h2>What data the Service accesses</h2>
+    <p>
+      The Service accesses MWL&rsquo;s own QuickBooks Online company via
+      Intuit&rsquo;s APIs, limited to the data needed for laboratory billing:
+    </p>
+    <ul>
+      <li>customer records (names, billing details);</li>
+      <li>product and service items;</li>
+      <li>invoices and their line items.</li>
+    </ul>
+
+    <h2>How it is used</h2>
+    <p>
+      Exclusively to support MWL&rsquo;s internal lab-intake and billing
+      workflows. Data is never sold, rented, or shared with third parties, and
+      is not used for advertising or analytics.
+    </p>
+
+    <h2>What is stored</h2>
+    <p>
+      The Service stores no QuickBooks business data. Every request is served
+      live from QuickBooks Online, which remains the system of record. The only
+      data the Service persists are the OAuth credentials Intuit issues to it,
+      held in Google Cloud Secret Manager with access restricted to the
+      Service&rsquo;s own runtime identity.
+    </p>
+
+    <h2>Security</h2>
+    <ul>
+      <li>All traffic is encrypted in transit (HTTPS/TLS).</li>
+      <li>The Service rejects unauthenticated requests; access is limited to
+        MWL&rsquo;s internal systems and named administrators.</li>
+      <li>OAuth tokens are encrypted at rest by Google Cloud Secret Manager.</li>
+    </ul>
+
+    <h2>This website</h2>
+    <p>
+      These pages are static. They set no cookies and use no analytics,
+      trackers, or third-party scripts.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      MWL may update this policy from time to time. The version published at
+      this URL is the current one.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Privacy questions:
+      <span class="placeholder">[contact email — set before Intuit submission]</span>
+    </p>
+
+    <footer>
+      <nav>
+        <a href="/">Home</a> &middot;
+        <a href="/eula">End User License Agreement</a>
+      </nav>
+      <p>&copy; 2026 Martin Water Labs</p>
+    </footer>
+  </main>
+</body>
+</html>

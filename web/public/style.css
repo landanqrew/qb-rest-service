@@ -1,0 +1,87 @@
+/* qb-pages — shared styles for the three public pages. Deliberately small:
+   no frameworks, no JS, system fonts only. */
+
+:root {
+  --ink: #1c2b33;
+  --muted: #5b6b73;
+  --accent: #0b6b78;
+  --rule: #d8e0e3;
+  --bg: #fbfcfc;
+  --draft-bg: #fff4d6;
+  --draft-ink: #6b5200;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  border-top: 4px solid var(--accent);
+}
+
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 4rem;
+}
+
+.kicker {
+  margin: 0 0 0.25rem;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 1.5rem;
+  font-size: 1.9rem;
+  line-height: 1.2;
+}
+
+h2 {
+  margin: 2rem 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+p,
+li {
+  color: var(--ink);
+}
+
+a {
+  color: var(--accent);
+}
+
+.draft-banner {
+  margin: 0 0 2rem;
+  padding: 0.6rem 1rem;
+  background: var(--draft-bg);
+  color: var(--draft-ink);
+  border-left: 4px solid var(--draft-ink);
+  font-size: 0.9rem;
+}
+
+.placeholder {
+  background: var(--draft-bg);
+  color: var(--draft-ink);
+  padding: 0 0.25rem;
+}
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+footer nav {
+  margin-bottom: 0.5rem;
+}

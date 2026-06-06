@@ -172,8 +172,27 @@ curl -i -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
 Once `/healthz` returns 200, complete the OAuth bootstrap per
 [`oauth-setup.md`](oauth-setup.md) §3.
 
+## 9. qb-pages runtime service account (Amendment 2)
+
+The public static-pages companion service ([`deploy-pages.sh`](deploy-pages.sh))
+deploys with a dedicated SA that has **no role bindings** — it serves three
+static HTML files, reads no secrets, and calls nothing.
+
+```bash
+gcloud iam service-accounts create qb-pages-runtime \
+  --display-name="qb-pages runtime (no permissions)" \
+  --project="${GCP_PROJECT}" || true
+```
+
+Do not bind any roles to it. qb-pages is deployed `--allow-unauthenticated`
+on purpose — Intuit's production-app constraints require publicly resolvable
+landing/EULA/privacy URLs — and the empty SA keeps the blast radius of
+"public" at those three files. See
+[`../docs/qb-service-scope.md`](../docs/qb-service-scope.md) §14.
+
 ## See also
 
 - [`oauth-setup.md`](oauth-setup.md) — Intuit dev console setup and OAuth flow
 - [`cloud-run.yaml`](cloud-run.yaml) — declarative form of what `deploy.sh` produces
+- [`qb-pages.cloud-run.yaml`](qb-pages.cloud-run.yaml) / [`deploy-pages.sh`](deploy-pages.sh) — public pages companion service
 - [`../docs/qb-service-scope.md`](../docs/qb-service-scope.md) §7 (auth), §14 (deployment)

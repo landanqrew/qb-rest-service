@@ -1,0 +1,19 @@
+# Rendered by the nginx image entrypoint via envsubst: ${PORT} (injected by
+# Cloud Run, default 8080 from the Dockerfile) is the only substitution.
+# nginx runtime variables like $uri survive because the entrypoint only
+# substitutes names present in the environment.
+server {
+    listen       ${PORT};
+    listen  [::]:${PORT};
+    server_name  _;
+
+    root   /usr/share/nginx/html;
+    index  index.html;
+
+    # Intuit's developer console gets extension-less URLs (/eula, /privacy);
+    # try_files maps them onto the .html files. The trailing `$uri/` lets the
+    # `index` directive resolve `/` to index.html.
+    location / {
+        try_files $uri $uri.html $uri/ =404;
+    }
+}
