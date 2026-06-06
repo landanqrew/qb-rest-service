@@ -1173,3 +1173,401 @@ def test_append_line_invoice_with_no_existing_lines_works(settings_env, token_st
         json={"item_id": "11", "qty": 1, "rate": 75.0},
     )
     assert resp.status_code == 200
+
+
+# ---------- line update / delete endpoints (PUT/DELETE .../lines/{line_id}) ----------
+
+
+def _invoice_two_lines(id_: str, sync_token: str = "3") -> dict:
+    """An invoice with TWO item lines (Ids "1" and "2") plus the QBO-appended
+    SubTotalLineDetail. Used so single-line edit/delete can prove the *other*
+    line and the subtotal are left untouched.
+    """
+    return _invoice(
+        id_,
+        SyncToken=sync_token,
+        Line=[
+            {
+                "Id": "1",
+                "LineNum": 1,
+                "Amount": 75.0,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                    "ItemRef": {"value": "9", "name": "Coliform Test"},
+                    "Qty": 1,
+                    "UnitPrice": 75.0,
+                },
+            },
+            {
+                "Id": "2",
+                "LineNum": 2,
+                "Amount": 100.0,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                    "ItemRef": {"value": "11", "name": "Nitrate Test"},
+                    "Qty": 2,
+                    "UnitPrice": 50.0,
+                },
+            },
+            {
+                "Amount": 175.0,
+                "DetailType": "SubTotalLineDetail",
+                "SubTotalLineDetail": {},
+            },
+        ],
+    )
+
+
+# ----- PUT .../lines/{line_id} -----
+
+
+def test_put_line_replaces_matching_line_returns_updated_invoice(settings_env, token_store):
+    """Acceptance: PUT replaces exactly the matching line; the route returns
+    the updated invoice in the standard envelope (200)."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+        assert request.method == "POST"
+        return _post_response(_invoice_two_lines("42", sync_token="4"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/2",
+        json={"item_id": "11", "qty": 4, "rate": 50.0},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["Id"] == "42"
+
+
+def test_put_line_sends_sparse_update_replacing_only_target(settings_env, token_store):
+    """The outbound sparse body keeps the untouched line verbatim, strips the
+    SubTotal, and replaces the target line in place (Id preserved so QBO
+    updates rather than re-numbers it)."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42", sync_token="7")})
+        body = json.loads(request.content)
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "7"
+        assert body["sparse"] is True
+        # SubTotal stripped; both item lines remain.
+        assert len(body["Line"]) == 2
+        detail_types = [line["DetailType"] for line in body["Line"]]
+        assert "SubTotalLineDetail" not in detail_types
+        # Line "1" is untouched.
+        line1 = next(line for line in body["Line"] if line["Id"] == "1")
+        assert line1["SalesItemLineDetail"]["ItemRef"] == {"value": "9", "name": "Coliform Test"}
+        assert line1["Amount"] == 75.0
+        # Line "2" is replaced in place: same Id, new qty/rate/amount.
+        line2 = next(line for line in body["Line"] if line["Id"] == "2")
+        assert line2["Amount"] == 200.0  # 4 * 50
+        assert line2["SalesItemLineDetail"]["ItemRef"] == {"value": "11"}
+        assert line2["SalesItemLineDetail"]["Qty"] == 4
+        assert line2["SalesItemLineDetail"]["UnitPrice"] == 50.0
+        return _post_response(_invoice_two_lines("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/2",
+        json={"item_id": "11", "qty": 4, "rate": 50.0},
+    )
+    assert resp.status_code == 200
+
+
+def test_put_line_without_rate_omits_unit_price_and_amount(settings_env, token_store):
+    """Same rate-less semantics as append: omit UnitPrice AND Amount so QBO
+    falls back to the item's stored default price."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+        body = json.loads(request.content)
+        line2 = next(line for line in body["Line"] if line["Id"] == "2")
+        assert "Amount" not in line2
+        assert "UnitPrice" not in line2["SalesItemLineDetail"]
+        return _post_response(_invoice_two_lines("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/2",
+        json={"item_id": "11", "qty": 3},  # no rate
+    )
+    assert resp.status_code == 200
+
+
+def test_put_line_unknown_line_returns_404(settings_env, token_store):
+    """Acceptance: unknown line_id (invoice exists, line doesn't) → 404 with a
+    line-specific message. The write (POST) must not fire."""
+    def handler(request):
+        assert request.method == "GET"  # no sparse POST for a missing line
+        return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/999",
+        json={"item_id": "11", "qty": 1, "rate": 50.0},
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "999" in body["error"]["message"]
+    assert "42" in body["error"]["message"]
+
+
+def test_put_line_unknown_invoice_returns_404(settings_env, token_store):
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {"Message": "Object Not Found", "Detail": "Object Not Found", "code": "610"}
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/9999/lines/1",
+        json={"item_id": "11", "qty": 1, "rate": 50.0},
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_put_line_stale_sync_token_returns_409(settings_env, token_store):
+    """Acceptance: stale SyncToken → 409 QBO_STALE_SYNC_TOKEN."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/2",
+        json={"item_id": "11", "qty": 1, "rate": 50.0},
+    )
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+    assert "Stale Object" in body["error"]["qbo_detail"]
+
+
+def test_put_line_invalid_invoice_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/0;DROP/lines/1",
+        json={"item_id": "11", "qty": 1, "rate": 50.0},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
+
+
+def test_put_line_invalid_line_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed line_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/abc",
+        json={"item_id": "11", "qty": 1, "rate": 50.0},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "line_id" in body["error"]["message"].lower()
+
+
+def test_put_line_missing_required_field_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/invoices/42/lines/2", json={"item_id": "11"})  # qty missing
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_put_line_unknown_body_field_returns_422(settings_env, token_store):
+    """Acceptance: PUT body is strict (extra=forbid); unknown fields → 422."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/2",
+        json={"item_id": "11", "qty": 1, "rate": 50.0, "unit_price": 50.0},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_put_line_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.put(
+        "/v1/invoices/42/lines/2",
+        json={"item_id": "11", "qty": 1, "rate": 50.0},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ----- DELETE .../lines/{line_id} -----
+
+
+def test_delete_line_removes_matching_line_returns_updated_invoice(settings_env, token_store):
+    """Acceptance: DELETE removes exactly the matching line; route returns the
+    updated invoice (200)."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+        assert request.method == "POST"
+        return _post_response(_invoice_two_lines("42", sync_token="4"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/2")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["Id"] == "42"
+
+
+def test_delete_line_sends_sparse_update_without_target(settings_env, token_store):
+    """The outbound body keeps the surviving line, strips the SubTotal, and
+    omits the deleted line entirely."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42", sync_token="7")})
+        body = json.loads(request.content)
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "7"
+        assert body["sparse"] is True
+        # Only line "1" survives; SubTotal stripped; line "2" gone.
+        assert len(body["Line"]) == 1
+        assert body["Line"][0]["Id"] == "1"
+        ids = [line.get("Id") for line in body["Line"]]
+        assert "2" not in ids
+        detail_types = [line["DetailType"] for line in body["Line"]]
+        assert "SubTotalLineDetail" not in detail_types
+        return _post_response(_invoice_two_lines("42", sync_token="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/2")
+    assert resp.status_code == 200
+
+
+def test_delete_last_line_returns_4xx_not_502(settings_env, token_store):
+    """Acceptance: deleting the last remaining line returns a clear 4xx, not a
+    QBO 502 pass-through. The write (POST) must not fire — we catch it before
+    QBO would reject the empty Line array."""
+    def handler(request):
+        assert request.method == "GET"  # must short-circuit before the POST
+        return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/1")
+    assert 400 <= resp.status_code < 500
+    body = resp.json()
+    assert body["error"]["code"] == "CANNOT_DELETE_LAST_LINE"
+    assert "1" in body["error"]["message"]
+
+
+def test_delete_line_unknown_line_returns_404(settings_env, token_store):
+    """Acceptance: unknown line_id on DELETE → 404. The write must not fire."""
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/999")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "999" in body["error"]["message"]
+    assert "42" in body["error"]["message"]
+
+
+def test_delete_line_unknown_invoice_returns_404(settings_env, token_store):
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {"Message": "Object Not Found", "Detail": "Object Not Found", "code": "610"}
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/9999/lines/1")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_delete_line_stale_sync_token_returns_409(settings_env, token_store):
+    """Acceptance: stale SyncToken on the write-back → 409."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_two_lines("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/2")
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+    assert "Stale Object" in body["error"]["qbo_detail"]
+
+
+def test_delete_line_invalid_invoice_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/0;DROP/lines/1")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
+
+
+def test_delete_line_invalid_line_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed line_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/abc")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "line_id" in body["error"]["message"].lower()
+
+
+def test_delete_line_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.delete("/v1/invoices/42/lines/1")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
