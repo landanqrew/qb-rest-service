@@ -100,26 +100,31 @@ qb-service/
 
 All routes return JSON. All non-GET routes require a valid Google ID token (Cloud Run IAM).
 
+Data routes are versioned under `/v1/` (see §16 #6). Operational routes —
+`/healthz`, `/readyz`, and `/admin/oauth/*` — are intentionally unversioned:
+health probes are not part of the API contract, and the OAuth callback path is
+registered byte-for-byte in the Intuit developer console, so it must stay stable.
+
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | Liveness — no QBO call |
 | GET | `/readyz` | Readiness — verifies token refresh works |
-| GET | `/customers` | List customers. Query: `active`, `modified_since`, `limit`, `cursor` |
-| GET | `/customers/{id}` | Single customer |
-| GET | `/items` | List items/products. Query: `active`, `modified_since`, `limit`, `cursor` |
-| GET | `/items/{id}` | Single item |
-| POST | `/items` | Create item. Body: `{name, type, income_account_id, unit_price?, ...}` *(Amendment 1)* |
-| PUT | `/items/{id}` | Sparse update, SyncToken-aware *(Amendment 1)* |
-| DELETE | `/items/{id}` | Deactivate (`Active: false`) — QBO cannot hard-delete items *(Amendment 1)* |
-| GET | `/invoices` | List invoices. Query: `customer_id`, `doc_number`, `modified_since`, `limit`, `cursor` |
-| GET | `/invoices/{id}` | Single invoice |
-| POST | `/invoices` | Create invoice. Body: `{customer_id, doc_number, txn_date?, lines[], memo?}` |
-| POST | `/invoices/{id}/lines` | Append a line. Body: `{item_id, qty, rate?, description?}` |
-| PUT | `/invoices/{id}` | Full replace, SyncToken-aware *(Amendment 1 — previously deferred)* |
-| DELETE | `/invoices/{id}` | Delete invoice (QBO `operation=delete`), SyncToken-aware *(Amendment 1)* |
-| POST | `/invoices/{id}/void` | Void invoice (QBO `operation=void` — record survives at $0), SyncToken-aware *(Amendment 1)* |
-| PUT | `/invoices/{id}/lines/{line_id}` | Update one line — read-modify-write full update of the parent invoice *(Amendment 1)* |
-| DELETE | `/invoices/{id}/lines/{line_id}` | Remove one line — same read-modify-write mechanics *(Amendment 1)* |
+| GET | `/v1/customers` | List customers. Query: `active`, `modified_since`, `limit`, `cursor` |
+| GET | `/v1/customers/{id}` | Single customer |
+| GET | `/v1/items` | List items/products. Query: `active`, `modified_since`, `limit`, `cursor` |
+| GET | `/v1/items/{id}` | Single item |
+| POST | `/v1/items` | Create item. Body: `{name, type, income_account_id, unit_price?, ...}` *(Amendment 1)* |
+| PUT | `/v1/items/{id}` | Sparse update, SyncToken-aware *(Amendment 1)* |
+| DELETE | `/v1/items/{id}` | Deactivate (`Active: false`) — QBO cannot hard-delete items *(Amendment 1)* |
+| GET | `/v1/invoices` | List invoices. Query: `customer_id`, `doc_number`, `modified_since`, `limit`, `cursor` |
+| GET | `/v1/invoices/{id}` | Single invoice |
+| POST | `/v1/invoices` | Create invoice. Body: `{customer_id, doc_number, txn_date?, lines[], memo?}` |
+| POST | `/v1/invoices/{id}/lines` | Append a line. Body: `{item_id, qty, rate?, description?}` |
+| PUT | `/v1/invoices/{id}` | Full replace, SyncToken-aware *(Amendment 1 — previously deferred)* |
+| DELETE | `/v1/invoices/{id}` | Delete invoice (QBO `operation=delete`), SyncToken-aware *(Amendment 1)* |
+| POST | `/v1/invoices/{id}/void` | Void invoice (QBO `operation=void` — record survives at $0), SyncToken-aware *(Amendment 1)* |
+| PUT | `/v1/invoices/{id}/lines/{line_id}` | Update one line — read-modify-write full update of the parent invoice *(Amendment 1)* |
+| DELETE | `/v1/invoices/{id}/lines/{line_id}` | Remove one line — same read-modify-write mechanics *(Amendment 1)* |
 | GET | `/admin/oauth/start` | Begin Intuit OAuth flow (admin-gated, see §7) |
 | GET | `/admin/oauth/callback` | Intuit redirect target; exchanges code, writes refresh token to Secret Manager |
 
@@ -256,10 +261,10 @@ Intuit production keys require publicly resolvable URLs for the app's landing pa
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | **0 — Bootstrap** | Fork repo, strip CLI-only code, FastAPI scaffold, `/healthz` | Local server runs, returns 200 |
-| **1 — Token plumbing** | `TokenStore` protocol, file + Secret Manager backends, concurrent-safe refresh, `/admin/oauth/*` routes | Can complete OAuth via browser and do `GET /customers` end-to-end against Cloud Run |
+| **1 — Token plumbing** | `TokenStore` protocol, file + Secret Manager backends, concurrent-safe refresh, `/admin/oauth/*` routes | Can complete OAuth via browser and do `GET /v1/customers` end-to-end against Cloud Run |
 | **2 — Read endpoints** | `customers`, `items`, `invoices` GET routes + pagination + filters | Web app team can prototype against deployed service |
-| **3 — Write endpoints** | `POST /invoices`, `POST /invoices/{id}/lines` | Test invoice round-trips through sandbox + prod realm |
-| **3b — Extended writes** *(Amendment 1)* | `POST/PUT/DELETE /items/*`, `PUT/DELETE /invoices/{id}`, `POST /invoices/{id}/void`, `PUT/DELETE /invoices/{id}/lines/{line_id}` | Item lifecycle + invoice edit/void/delete round-trip through sandbox |
+| **3 — Write endpoints** | `POST /v1/invoices`, `POST /v1/invoices/{id}/lines` | Test invoice round-trips through sandbox + prod realm |
+| **3b — Extended writes** *(Amendment 1)* | `POST/PUT/DELETE /v1/items/*`, `PUT/DELETE /v1/invoices/{id}`, `POST /v1/invoices/{id}/void`, `PUT/DELETE /v1/invoices/{id}/lines/{line_id}` | Item lifecycle + invoice edit/void/delete round-trip through sandbox |
 | **4 — Hardening** | Structured logging, error envelope, rate limiter, IAM lockdown, observability | Ready for Lab Intake web app to depend on it |
 | **4b — Production launch** *(Amendment 2)* | `qb-pages` public pages service; deploy both services to Cloud Run; Intuit app production keys + redirect URIs; OAuth bootstrap against the prod realm | `GET /v1/customers` works end-to-end against the production MWL realm |
 | **5 — Web app integration** | (Other repo) | Phase 3 of the Lab Intake diagram works end-to-end |
@@ -273,8 +278,8 @@ Estimate: Phases 0–4 are roughly a week of focused work for one person, gated 
 3. **`modified_since` filter:** QBO supports `MetaData.LastUpdatedTime > 'YYYY-MM-DD'` via SQL. Worth exposing on all list endpoints so the web app can do delta pulls if it ever wants to cache. Cheap to add.
 4. ~~Should the bootstrap refresh-token step live in this repo or stay in `quickbooks-cli`?~~ **Resolved:** qb-service owns the full OAuth flow via `/admin/oauth/*` (§8). No bootstrap CLI; the CLI keeps its own independent auth for its own use case.
 5. **Schema validation strictness on writes:** reject unknown fields (Pydantic `extra="forbid"`) or pass through? Recommendation: forbid, so the web app gets clear errors instead of silent drops.
-6. **Versioning:** prefix routes with `/v1/`? Recommendation: yes, cheap insurance.
-7. ~~**Invoice delete vs. void:** does the web app need void, delete, or both?~~ **Resolved (Amendment 1):** expose both — `DELETE /invoices/{id}` (hard delete) and `POST /invoices/{id}/void`. Which one the web app actually uses is its call; dropping the unused route later is cheap.
+6. ~~**Versioning:** prefix routes with `/v1/`?~~ **Resolved:** yes — data routes are prefixed with `/v1/` (§6). Operational routes (`/healthz`, `/readyz`, `/admin/oauth/*`) stay unversioned.
+7. ~~**Invoice delete vs. void:** does the web app need void, delete, or both?~~ **Resolved (Amendment 1):** expose both — `DELETE /v1/invoices/{id}` (hard delete) and `POST /v1/invoices/{id}/void`. Which one the web app actually uses is its call; dropping the unused route later is cheap.
 
 ## 17. What we are *not* deciding now
 
@@ -294,9 +299,9 @@ The Lab Intake requirements list asks for a wider write surface than v1 scoped: 
 
 QBO constraints that shaped the route semantics:
 
-- **Items cannot be hard-deleted.** The API only supports `Active: false`. `DELETE /items/{id}` is therefore a deactivation; QBO appends "(deleted)" to the name of deactivated items it must disambiguate.
-- **Invoice delete removes the transaction.** QBO `operation=void` is the audit-friendly alternative (record survives at $0). We expose both — `DELETE /invoices/{id}` and `POST /invoices/{id}/void` — and let the web app pick; the unused route is cheap to drop later (§16 #7).
-- **No per-line API.** QBO has no line-item endpoints; updating or removing a line means a full update of the parent invoice (read current state, modify the `Line[]` array, write back with the fresh `SyncToken`). The `/invoices/{id}/lines/{line_id}` routes wrap that read-modify-write so the web app doesn't reimplement QBO's full-update semantics. `line_id` is QBO's stable `Line.Id` within the invoice.
+- **Items cannot be hard-deleted.** The API only supports `Active: false`. `DELETE /v1/items/{id}` is therefore a deactivation; QBO appends "(deleted)" to the name of deactivated items it must disambiguate.
+- **Invoice delete removes the transaction.** QBO `operation=void` is the audit-friendly alternative (record survives at $0). We expose both — `DELETE /v1/invoices/{id}` and `POST /v1/invoices/{id}/void` — and let the web app pick; the unused route is cheap to drop later (§16 #7).
+- **No per-line API.** QBO has no line-item endpoints; updating or removing a line means a full update of the parent invoice (read current state, modify the `Line[]` array, write back with the fresh `SyncToken`). The `/v1/invoices/{id}/lines/{line_id}` routes wrap that read-modify-write so the web app doesn't reimplement QBO's full-update semantics. `line_id` is QBO's stable `Line.Id` within the invoice.
 
 ### Amendment 2 — 2026-06-06: public pages service + production launch phase
 
