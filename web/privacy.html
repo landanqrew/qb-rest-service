@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy &mdash; MWL Lab Intake QuickBooks Integration</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #1a2330;
+      background: #f5f7fa;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 2.5rem 1.5rem 3rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 1rem; }
+    h2 { font-size: 1.1rem; margin: 1.75rem 0 .4rem; }
+    p, li { margin: .5rem 0; }
+    ul { padding-left: 1.25rem; }
+    a { color: #0b6ea8; }
+    .draft {
+      background: #fff4e5;
+      border: 1px solid #f0c674;
+      border-radius: 8px;
+      padding: .85rem 1.1rem;
+      margin: 0 0 1.5rem;
+      font-size: .95rem;
+    }
+    .back { display: inline-block; margin-top: 2rem; font-size: .95rem; }
+    .meta { color: #56657a; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="draft">
+      <strong>DRAFT &mdash; for internal review.</strong> This Privacy Policy is
+      boilerplate drafted for a single-tenant internal business integration. It
+      must be reviewed and approved by Landan before the app is submitted to
+      Intuit for production.
+    </p>
+
+    <h1>Privacy Policy</h1>
+    <p class="meta">MWL Lab Intake &mdash; QuickBooks Online Integration</p>
+
+    <h2>1. Overview</h2>
+    <p>
+      This Privacy Policy describes how the Martin Water Labs ("MWL") Lab Intake
+      integration with QuickBooks Online (the "Integration") handles data. The
+      Integration is an internal, single-tenant tool used only by Martin Water
+      Labs to connect its Lab Intake application to its own QuickBooks Online
+      company. It is not a consumer-facing product and does not collect data from
+      members of the public.
+    </p>
+
+    <h2>2. Data we access</h2>
+    <p>
+      When authorized by an MWL administrator, the Integration accesses the
+      following from the Martin Water Labs QuickBooks Online company:
+    </p>
+    <ul>
+      <li>Customer records (names, contact and billing details).</li>
+      <li>Products and services (items) used on invoices.</li>
+      <li>Invoices and their line items.</li>
+    </ul>
+    <p>
+      This data is read from, and written to, QuickBooks Online on behalf of
+      Martin Water Labs in the course of MWL's normal accounting operations.
+    </p>
+
+    <h2>3. How we use it</h2>
+    <p>
+      Data is used solely to synchronize lab orders between MWL's Lab Intake
+      application and QuickBooks Online &mdash; for example, looking up a customer,
+      selecting an item, and creating or updating the corresponding invoice. The
+      Integration performs no analytics, profiling, advertising, or sale of data.
+    </p>
+
+    <h2>4. Data storage and retention</h2>
+    <p>
+      The Integration holds no business data of its own. It does not maintain a
+      database or cache of QuickBooks records; every request is made live against
+      QuickBooks Online. The only credential the Integration stores is the OAuth
+      token needed to call QuickBooks on MWL's behalf, kept in Google Cloud
+      Secret Manager and used only to maintain the authorized connection.
+    </p>
+
+    <h2>5. Data sharing</h2>
+    <p>
+      QuickBooks data is not shared with any third party. It moves only between
+      Martin Water Labs' own systems (the Lab Intake application and the
+      Integration) and Intuit's QuickBooks Online service.
+    </p>
+
+    <h2>6. Security</h2>
+    <p>
+      The Integration runs on Google Cloud Run, communicates with QuickBooks
+      Online over HTTPS, and restricts access to authorized Martin Water Labs
+      systems. OAuth credentials are stored in Google Cloud Secret Manager.
+    </p>
+
+    <h2>7. Intuit / QuickBooks Online</h2>
+    <p>
+      Data within QuickBooks Online is also subject to Intuit's own privacy
+      policy and terms. This policy does not modify or supersede any agreement
+      between Martin Water Labs and Intuit. "QuickBooks" and "Intuit" are
+      trademarks of Intuit Inc.
+    </p>
+
+    <h2>8. Changes</h2>
+    <p>
+      This policy may be updated as the Integration evolves. Material changes
+      will be reflected on this page.
+    </p>
+
+    <h2>9. Contact</h2>
+    <p>
+      Questions about this Privacy Policy should be directed to the Martin Water
+      Labs administrator responsible for the Integration.
+    </p>
+
+    <a class="back" href="/">&larr; Back to home</a>
+  </div>
+</body>
+</html>

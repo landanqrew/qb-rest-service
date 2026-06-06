@@ -1,0 +1,43 @@
+# nginx server block for qb-pages.
+#
+# The official nginx image runs envsubst over /etc/nginx/templates/*.template at
+# container start, writing the result to /etc/nginx/conf.d/. Only environment
+# variables that are actually set are substituted, so ${PORT} is filled from the
+# port Cloud Run injects (default 8080) while nginx's own runtime variables are
+# left untouched. We deliberately use only literal try_files targets here so the
+# config has no nginx $variables to protect.
+#
+# Surface is exactly three pages plus a health check. Anything else is a 404 —
+# that is the whole point of qb-pages: a fixed, boring blast radius.
+
+server {
+    listen       ${PORT};
+    server_name  _;
+
+    root /usr/share/nginx/html;
+
+    # Liveness / startup probe — no file lookup.
+    location = /healthz {
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Landing page.
+    location = / {
+        try_files /index.html =404;
+    }
+
+    # Clean URLs for the two legal pages Intuit requires.
+    location = /eula {
+        try_files /eula.html =404;
+    }
+
+    location = /privacy {
+        try_files /privacy.html =404;
+    }
+
+    # Keep the surface fixed: everything else is a 404.
+    location / {
+        return 404;
+    }
+}

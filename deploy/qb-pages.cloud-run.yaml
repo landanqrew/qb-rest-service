@@ -1,0 +1,70 @@
+# Knative service manifest for qb-pages on Cloud Run.
+#
+# qb-pages is the companion *public* service: it serves three static HTML pages
+# (landing, EULA, privacy) so Intuit's production-app review has real, publicly
+# resolvable URLs. It is the deliberate opposite of qb-service:
+#
+#   - PUBLIC (--allow-unauthenticated), where qb-service is IAM-locked.
+#   - ZERO secrets, ZERO env wiring, ZERO QBO access.
+#   - A dedicated runtime service account with NO IAM grants of any kind, so a
+#     compromise of this public surface reaches nothing. Blast radius = three
+#     HTML files.
+#
+# Applied via `gcloud run services replace deploy/qb-pages.cloud-run.yaml` once
+# the placeholders below are filled in. `deploy/qb-pages.deploy.sh` is the easier
+# day-to-day entrypoint; this file is the declarative source of truth.
+#
+# IMPORTANT: making the service public is an IAM binding (allUsers ->
+# roles/run.invoker), NOT part of this manifest. Apply it separately, e.g.:
+#   gcloud run services add-iam-policy-binding qb-pages \
+#       --region=REGION --member=allUsers --role=roles/run.invoker
+# The deploy script does this for you with --allow-unauthenticated.
+#
+# Placeholders (substitute before applying):
+#   PROJECT_ID  — GCP project hosting Cloud Run
+#   IMAGE       — fully-qualified container image, e.g.
+#                 REGION-docker.pkg.dev/PROJECT_ID/qb-pages/qb-pages:GIT_SHA
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: qb-pages
+  annotations:
+    run.googleapis.com/launch-stage: GA
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "4"
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      # Dedicated, permission-less service account. It must hold NO IAM roles.
+      # It exists only so qb-pages does not run as the default compute SA.
+      serviceAccountName: qb-pages-runtime@PROJECT_ID.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 30
+      containers:
+        - name: qb-pages
+          image: IMAGE
+          ports:
+            - name: http1
+              containerPort: 8080
+          # No env vars: nginx reads $PORT, which Cloud Run injects automatically.
+          # No secrets. No QBO config. Intentionally empty.
+          resources:
+            limits:
+              cpu: "1"
+              memory: 128Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            timeoutSeconds: 3
+            periodSeconds: 3
+            failureThreshold: 10
+  traffic:
+    - latestRevision: true
+      percent: 100

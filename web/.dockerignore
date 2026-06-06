@@ -1,0 +1,9 @@
+# qb-pages build context is just the static pages + nginx config. Keep
+# everything else out so the image can never accidentally pick up source,
+# secrets, or tooling from the rest of the repo.
+*
+!index.html
+!eula.html
+!privacy.html
+!nginx/
+!nginx/default.conf.template
