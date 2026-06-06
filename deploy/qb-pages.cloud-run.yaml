@@ -39,7 +39,9 @@ spec:
         autoscaling.knative.dev/minScale: "0"
         autoscaling.knative.dev/maxScale: "4"
         run.googleapis.com/cpu-throttling: "true"
-        run.googleapis.com/execution-environment: gen2
+        # gen1, not gen2: gen2 rejects memory < 512Mi, and a static nginx
+        # doesn't need more than 128Mi.
+        run.googleapis.com/execution-environment: gen1
     spec:
       # Dedicated, permission-less service account. It must hold NO IAM roles.
       # It exists only so qb-pages does not run as the default compute SA.

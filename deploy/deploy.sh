@@ -56,9 +56,13 @@ IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE}:${GIT_SHA}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> Building image ${IMAGE}"
+# cloudbuild.yaml forces BuildKit — the default --tag path uses the legacy
+# Docker builder, which can't parse this Dockerfile (ARG in COPY --from,
+# RUN --mount caches).
 gcloud builds submit "${REPO_ROOT}" \
   --project="${GCP_PROJECT}" \
-  --tag="${IMAGE}"
+  --config="${REPO_ROOT}/cloudbuild.yaml" \
+  --substitutions="_IMAGE=${IMAGE}"
 
 # First deploy: derive the service URL after the fact. On subsequent deploys
 # we reuse the existing URL so the Intuit-registered OAuth redirect stays
@@ -116,4 +120,7 @@ echo "Next steps:"
 echo "  1. Register ${URL}/admin/oauth/callback in the Intuit developer console."
 echo "  2. Browse to ${URL}/admin/oauth/start with an admin identity that has"
 echo "     roles/run.invoker to complete the OAuth bootstrap."
-echo "  3. Verify: curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${URL}/healthz"
+# /readyz, not /healthz: Google's frontend intercepts the literal /healthz
+# path on run.app domains (404 before the container sees it).
+echo "  3. Verify: curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${URL}/readyz"
+echo "     (503 NOT_AUTHENTICATED is expected until the OAuth bootstrap in step 2.)"

@@ -63,7 +63,7 @@ gcloud run deploy "${SERVICE}" \
   --memory=128Mi \
   --timeout=30 \
   --port=8080 \
-  --execution-environment=gen2
+  --execution-environment=gen1
 
 URL="$(gcloud run services describe "${SERVICE}" \
   --project="${GCP_PROJECT}" --region="${REGION}" \
@@ -77,7 +77,10 @@ echo "  EULA URL          : ${URL}/eula"
 echo "  Privacy policy URL: ${URL}/privacy"
 echo
 echo "==> Smoke test (no auth — these are public):"
-for path in / /eula /privacy /healthz; do
+# /healthz is deliberately absent: Google's frontend intercepts that literal
+# path on run.app domains and answers 404 before nginx sees the request.
+# Container-internal probes still reach it; external checks cannot.
+for path in / /eula /privacy; do
   code="$(curl -sS -o /dev/null -w '%{http_code}' "${URL}${path}")"
   echo "  ${path} -> ${code}"
   if [[ "${code}" != "200" ]]; then

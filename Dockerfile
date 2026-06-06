@@ -9,10 +9,14 @@
 ARG PYTHON_VERSION=3.13
 ARG UV_VERSION=0.5.11
 
+# ARG only expands in FROM lines, not in COPY --from (even under BuildKit) —
+# alias the uv image as a stage so the version stays parameterized.
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
 # ---------- builder ----------
 FROM python:${PYTHON_VERSION}-slim AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/
+COPY --from=uv /uv /uvx /usr/local/bin/
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
