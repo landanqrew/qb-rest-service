@@ -383,10 +383,14 @@ def _execute_invoice_write(
         return error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
 
     entity = resp.get("Invoice")
-    if entity is None:
+    if not isinstance(entity, dict):
+        # Mirror the read-phase guard: a 200 whose Invoice body is missing or a
+        # non-object (e.g. `{"Invoice": []}`) is an upstream contract break.
+        # Surface 502 rather than crash in DetailResponse(data=entity) and
+        # leak an unhandled 500.
         return error_response(
             "QBO_ERROR",
-            "QBO did not return an Invoice in the write response",
+            "QBO did not return a valid Invoice object in the write response",
             502,
         )
 

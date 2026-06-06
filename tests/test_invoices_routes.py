@@ -1657,6 +1657,24 @@ def test_write_read_phase_non_dict_invoice_body_returns_502(settings_env, token_
     assert body["error"]["code"] == "QBO_ERROR"
 
 
+def test_write_phase_non_dict_invoice_body_returns_502(settings_env, token_store):
+    """The write phase has the same guard as the read phase: a 200 whose
+    Invoice is a non-object (e.g. `{"Invoice": []}`) must return 502 rather
+    than crash building the DetailResponse. Exercised via DELETE: the GET
+    succeeds, the delete POST returns the malformed body.
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return httpx.Response(200, json={"Invoice": []})  # malformed write response
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42")
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_ERROR"
+
+
 # ---------- line update / delete endpoints (PUT/DELETE .../lines/{line_id}) ----------
 
 
