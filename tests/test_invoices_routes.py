@@ -1183,6 +1183,13 @@ def _operation(request: httpx.Request) -> str | None:
     return parse_qs(urlparse(str(request.url)).query).get("operation", [None])[0]
 
 
+def _minorversion(request: httpx.Request) -> str | None:
+    """Pull the QBO `minorversion` query param off an outbound request. Every
+    QBO call must pin minorversion=75 (project guideline); asserting it on the
+    write paths keeps that contract from regressing silently."""
+    return parse_qs(urlparse(str(request.url)).query).get("minorversion", [None])[0]
+
+
 def test_put_replaces_invoice_and_returns_envelope(settings_env, token_store):
     """Acceptance: PUT replaces the invoice wholesale and returns the updated
     invoice in the DetailResponse envelope. The route reads the current
@@ -1226,6 +1233,7 @@ def test_put_sends_full_update_with_id_and_sync_token_no_sparse(settings_env, to
         assert body["SyncToken"] == "7"
         assert body.get("sparse") is not True
         assert _operation(request) is None
+        assert _minorversion(request) == "75"
         assert body["CustomerRef"] == {"value": "55"}
         assert body["DocNumber"] == "26-02-0042"
         assert len(body["Line"]) == 1
@@ -1257,6 +1265,7 @@ def test_put_with_empty_lines_sends_explicit_empty_line_array(settings_env, toke
     def handler(request):
         if request.method == "GET":
             return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert _minorversion(request) == "75"
         body = json.loads(request.content)
         assert body["Line"] == []
         assert body["Id"] == "42"
@@ -1425,6 +1434,7 @@ def test_delete_removes_invoice_and_returns_confirmation(settings_env, token_sto
             return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
         assert request.method == "POST"
         assert _operation(request) == "delete"
+        assert _minorversion(request) == "75"
         body = json.loads(request.content)
         assert body == {"Id": "42", "SyncToken": "3"}
         return _delete_confirmation("42")
@@ -1531,6 +1541,7 @@ def test_void_voids_invoice_and_returns_record(settings_env, token_store):
             return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
         assert request.method == "POST"
         assert _operation(request) == "void"
+        assert _minorversion(request) == "75"
         body = json.loads(request.content)
         assert body == {"Id": "42", "SyncToken": "3"}
         return _post_response(voided)
