@@ -42,6 +42,14 @@ AR_REPO="${AR_REPO:-qb-service}"
 RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
 INTUIT_ENV="${INTUIT_ENV:-production}"
 
+# Fail before the build/deploy cycle on a bad value — Settings would reject
+# it at container start (pattern ^(production|sandbox)$) after minutes of
+# waiting on Cloud Build.
+if [[ ! "${INTUIT_ENV}" =~ ^(production|sandbox)$ ]]; then
+  echo "ERROR: INTUIT_ENV must be 'production' or 'sandbox', got: ${INTUIT_ENV}" >&2
+  exit 1
+fi
+
 GIT_SHA="$(git rev-parse --short HEAD)"
 IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE}:${GIT_SHA}"
 
