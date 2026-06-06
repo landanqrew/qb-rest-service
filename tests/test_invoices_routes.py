@@ -1173,3 +1173,423 @@ def test_append_line_invoice_with_no_existing_lines_works(settings_env, token_st
         json={"item_id": "11", "qty": 1, "rate": 75.0},
     )
     assert resp.status_code == 200
+
+
+# ---------- PUT (full replace) endpoint ----------
+
+
+def _operation(request: httpx.Request) -> str | None:
+    """Pull the QBO `operation` query param off an outbound write request."""
+    return parse_qs(urlparse(str(request.url)).query).get("operation", [None])[0]
+
+
+def test_put_replaces_invoice_and_returns_envelope(settings_env, token_store):
+    """Acceptance: PUT replaces the invoice wholesale and returns the updated
+    invoice in the DetailResponse envelope. The route reads the current
+    invoice for its SyncToken, then full-updates.
+    """
+    replaced = _invoice("42", SyncToken="4", TotalAmt=150.0)
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert request.method == "POST"
+        return _post_response(replaced)
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0042",
+            "lines": [{"item_id": "9", "qty": 2, "rate": 75.0}],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["Id"] == "42"
+    assert body["data"]["TotalAmt"] == 150.0
+
+
+def test_put_sends_full_update_with_id_and_sync_token_no_sparse(settings_env, token_store):
+    """The outbound body carries Id + SyncToken and the full Line array, and
+    must NOT set sparse=true (this is a full replace, not a sparse update).
+    The operation query param is also omitted for a plain update.
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"Invoice": _invoice_for_append("42", sync_token="7")}
+            )
+        body = json.loads(request.content)
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "7"
+        assert body.get("sparse") is not True
+        assert _operation(request) is None
+        assert body["CustomerRef"] == {"value": "55"}
+        assert body["DocNumber"] == "26-02-0042"
+        assert len(body["Line"]) == 1
+        line = body["Line"][0]
+        assert line["DetailType"] == "SalesItemLineDetail"
+        assert line["Amount"] == 150.0  # 2 * 75
+        assert line["SalesItemLineDetail"]["ItemRef"] == {"value": "9"}
+        return _post_response(_invoice("42", SyncToken="8"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0042",
+            "lines": [{"item_id": "9", "qty": 2, "rate": 75.0}],
+        },
+    )
+    assert resp.status_code == 200
+
+
+def test_put_invalid_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/0;DROP",
+        json={"customer_id": "55", "doc_number": "26-02-0042"},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
+
+
+def test_put_stale_sync_token_returns_409(settings_env, token_store):
+    """Acceptance: stale SyncToken (QBO 5010) → 409 QBO_STALE_SYNC_TOKEN."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={"customer_id": "55", "doc_number": "26-02-0042"},
+    )
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+    assert "Stale Object" in body["error"]["qbo_detail"]
+
+
+def test_put_unknown_invoice_returns_404(settings_env, token_store):
+    """Acceptance: not found → 404. The GET phase surfaces the missing id."""
+    def handler(request):
+        assert request.method == "GET"  # POST must not fire
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Object Not Found",
+                            "Detail": "Object Not Found",
+                            "code": "610",
+                        }
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/9999",
+        json={"customer_id": "55", "doc_number": "26-02-0042"},
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_put_unknown_body_field_returns_422(settings_env, token_store):
+    """Acceptance: PUT body validation is strict (extra=forbid); unknown
+    fields → 422.
+    """
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0042",
+            "tnx_date": "2026-02-15",  # typo for txn_date
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_put_line_without_rate_returns_422(settings_env, token_store):
+    """Same as create: every line on a full replace must carry a rate."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when a line is missing its rate")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0042",
+            "lines": [{"item_id": "9", "qty": 1}],  # rate absent
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_put_propagates_qbo_5xx_as_502(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={"customer_id": "55", "doc_number": "26-02-0042"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_put_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={"customer_id": "55", "doc_number": "26-02-0042"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- DELETE endpoint ----------
+
+
+def _delete_confirmation(id_: str) -> httpx.Response:
+    """Shape QBO returns for operation=delete: an Invoice stub with a
+    `status: Deleted` marker rather than the full record.
+    """
+    return httpx.Response(
+        200,
+        json={"Invoice": {"Id": id_, "status": "Deleted", "domain": "QBO"}},
+    )
+
+
+def test_delete_removes_invoice_and_returns_confirmation(settings_env, token_store):
+    """Acceptance: DELETE deletes via operation=delete and returns the QBO
+    confirmation in the standard envelope.
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert request.method == "POST"
+        assert _operation(request) == "delete"
+        body = json.loads(request.content)
+        assert body == {"Id": "42", "SyncToken": "3"}
+        return _delete_confirmation("42")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["Id"] == "42"
+    assert body["data"]["status"] == "Deleted"
+
+
+def test_delete_invalid_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/0;DROP")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
+
+
+def test_delete_already_deleted_passes_through_404(settings_env, token_store):
+    """Acceptance: deleting an already-deleted invoice surfaces QBO's error
+    (not masked). The GET phase reports object-not-found → 404.
+    """
+    def handler(request):
+        assert request.method == "GET"  # POST must not fire
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Object Not Found",
+                            "Detail": "Object Not Found",
+                            "code": "610",
+                        }
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/9999")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_delete_stale_sync_token_returns_409(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42")
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+
+
+def test_delete_propagates_qbo_5xx_as_502(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42")
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_delete_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.delete("/v1/invoices/42")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- void endpoint ----------
+
+
+def test_void_voids_invoice_and_returns_record(settings_env, token_store):
+    """Acceptance: POST /void voids via operation=void and returns the voided
+    invoice (record survives at $0).
+    """
+    voided = _invoice("42", SyncToken="4", TotalAmt=0.0, PrivateNote="Voided")
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert request.method == "POST"
+        assert _operation(request) == "void"
+        body = json.loads(request.content)
+        assert body == {"Id": "42", "SyncToken": "3"}
+        return _post_response(voided)
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/invoices/42/void")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["Id"] == "42"
+    assert body["data"]["TotalAmt"] == 0.0
+
+
+def test_void_invalid_id_rejected_without_hitting_qbo(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for malformed invoice_id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/invoices/0;DROP/void")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "invoice_id" in body["error"]["message"].lower()
+
+
+def test_void_unknown_invoice_returns_404(settings_env, token_store):
+    def handler(request):
+        assert request.method == "GET"  # POST must not fire
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Object Not Found",
+                            "Detail": "Object Not Found",
+                            "code": "610",
+                        }
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/invoices/9999/void")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_void_stale_sync_token_returns_409(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/invoices/42/void")
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+
+
+def test_void_propagates_qbo_5xx_as_502(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/invoices/42/void")
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_void_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.post("/v1/invoices/42/void")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
