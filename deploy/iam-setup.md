@@ -156,21 +156,27 @@ gcloud run services add-iam-policy-binding "${SERVICE}" \
 
 ## 8. Verify
 
+> **Why `/readyz`, not `/healthz`?** Google's frontend intercepts the
+> literal path `/healthz` on `run.app` domains and answers 404 before the
+> request reaches the container. Container-internal probes still reach it;
+> external checks must use `/readyz`.
+
 ```bash
 URL="$(gcloud run services describe "${SERVICE}" \
   --project="${GCP_PROJECT}" --region="${REGION}" \
   --format='value(status.url)')"
 
-# No auth → 403
-curl -i "${URL}/healthz"
+# No auth → 403 (rejected at the edge)
+curl -i "${URL}/readyz"
 
-# With a valid ID token → 200
+# With a valid ID token → 200, or 503 NOT_AUTHENTICATED before the OAuth
+# bootstrap has run (that's the app answering — the deploy is good).
 curl -i -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  "${URL}/healthz"
+  "${URL}/readyz"
 ```
 
-Once `/healthz` returns 200, complete the OAuth bootstrap per
-[`oauth-setup.md`](oauth-setup.md) §3.
+Once `/readyz` answers with the app's JSON envelope, complete the OAuth
+bootstrap per [`oauth-setup.md`](oauth-setup.md) §3.
 
 ## See also
 

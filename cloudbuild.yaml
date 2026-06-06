@@ -1,0 +1,14 @@
+# Cloud Build config for qb-service.
+#
+# The bare `gcloud builds submit --tag` path uses Cloud Build's legacy Docker
+# builder, which cannot parse this repo's Dockerfile (BuildKit features:
+# ARG expansion in COPY --from, RUN --mount cache mounts). Build through the
+# docker builder with DOCKER_BUILDKIT=1 instead.
+#
+# Invoked by deploy/deploy.sh with: --substitutions=_IMAGE=<full image ref>
+steps:
+  - name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
+    args: ["build", "-t", "${_IMAGE}", "."]
+images:
+  - "${_IMAGE}"

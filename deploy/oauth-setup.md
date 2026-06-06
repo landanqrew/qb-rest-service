@@ -4,6 +4,16 @@ qb-service hosts its own OAuth handshake at `/admin/oauth/start` and
 `/admin/oauth/callback`. No CLI, no laptop browser callback, no manual
 Secret Manager edits in the normal case.
 
+## Deployed service URLs (2026-06-06, project `qrew-tech-1526597818524`)
+
+| Service    | URL                                              | Notes                                        |
+| ---------- | ------------------------------------------------ | -------------------------------------------- |
+| qb-service | `https://qb-service-5htcalpr7a-uc.a.run.app`     | IAM-gated; sandbox env (`INTUIT_ENV=sandbox`) |
+| qb-pages   | `https://qb-pages-5htcalpr7a-uc.a.run.app`       | Public; host/EULA/privacy pages for Intuit   |
+
+OAuth redirect URI registered with Intuit:
+`https://qb-service-5htcalpr7a-uc.a.run.app/admin/oauth/callback`
+
 > First time deploying to Cloud Run? Walk through
 > [`iam-setup.md`](iam-setup.md) first — it stands up the runtime
 > service account and the three Secret Manager secrets this doc
