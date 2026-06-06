@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -336,3 +337,485 @@ def test_unauthenticated_returns_503_envelope(settings_env, tmp_path):
     assert resp.status_code == 503
     body = resp.json()
     assert body["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- write endpoint helpers ----------
+
+
+def _post_response(item: dict, status: int = 200) -> httpx.Response:
+    return httpx.Response(status, json={"Item": item, "time": "2026-06-06T10:00:00Z"})
+
+
+def _item_for_update(id_: str, sync_token: str = "3", **fields) -> dict:
+    """An item with a SyncToken, as returned by the GET phase of a sparse
+    update. The PUT/DELETE flows read this for the SyncToken before writing.
+    """
+    return _item(
+        id_,
+        SyncToken=sync_token,
+        IncomeAccountRef={"value": "79", "name": "Sales of Product Income"},
+        UnitPrice=75.0,
+        **fields,
+    )
+
+
+def _duplicate_name_response() -> httpx.Response:
+    """Shape Intuit returns when item-name uniqueness is violated.
+
+    HTTP 400 with Fault.Error[].code=6240. The service maps this to HTTP 409
+    with our QBO_DUPLICATE_NAME code so callers can dedupe on it — the same
+    pattern the invoice routes use for duplicate DocNumber.
+    """
+    return httpx.Response(
+        400,
+        json={
+            "Fault": {
+                "Error": [
+                    {
+                        "Message": "Duplicate Name Exists Error",
+                        "Detail": (
+                            "Duplicate Name Exists Error : The name supplied "
+                            "already exists. : Another Item is already using this "
+                            "name."
+                        ),
+                        "code": "6240",
+                    }
+                ],
+                "type": "ValidationFault",
+            }
+        },
+    )
+
+
+def _stale_sync_token_response() -> httpx.Response:
+    """Intuit's "Stale Object Error" — error code 5010 — fired when a sparse
+    update's SyncToken doesn't match the current value on the server.
+    """
+    return httpx.Response(
+        400,
+        json={
+            "Fault": {
+                "Error": [
+                    {
+                        "Message": "Stale Object Error",
+                        "Detail": (
+                            "Stale Object Error : You and seeddata were updating "
+                            "the same Item. Your changes are not saved."
+                        ),
+                        "code": "5010",
+                    }
+                ],
+                "type": "ValidationFault",
+            }
+        },
+    )
+
+
+def _not_found_response() -> httpx.Response:
+    return httpx.Response(
+        400,
+        json={
+            "Fault": {
+                "Error": [
+                    {
+                        "Message": "Object Not Found",
+                        "Detail": "Object Not Found",
+                        "code": "610",
+                    }
+                ],
+                "type": "ValidationFault",
+            }
+        },
+    )
+
+
+# ---------- create (POST) ----------
+
+
+def test_create_returns_201_with_item_envelope(settings_env, token_store):
+    """Acceptance: create returns 201 with the created item in the envelope."""
+    def handler(request):
+        assert request.method == "POST"
+        assert "/item" in str(request.url)
+        return _post_response(_item("99", Name="Coliform Test"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={
+            "name": "Coliform Test",
+            "type": "Service",
+            "income_account_id": "79",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["data"]["Id"] == "99"
+    assert body["data"]["Name"] == "Coliform Test"
+
+
+def test_create_maps_fields_to_qbo_body(settings_env, token_store):
+    """name/type/income_account_id/unit_price map to QBO's item shape."""
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["Name"] == "Coliform Test"
+        assert body["Type"] == "Service"
+        assert body["IncomeAccountRef"] == {"value": "79"}
+        assert body["UnitPrice"] == 75.0
+        return _post_response(_item("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={
+            "name": "Coliform Test",
+            "type": "Service",
+            "income_account_id": "79",
+            "unit_price": 75.0,
+        },
+    )
+    assert resp.status_code == 201
+
+
+def test_create_omits_absent_unit_price(settings_env, token_store):
+    """An absent optional field must not appear in the QBO body."""
+    def handler(request):
+        body = json.loads(request.content)
+        assert "UnitPrice" not in body
+        return _post_response(_item("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 201
+
+
+def test_create_duplicate_name_returns_409(settings_env, token_store):
+    """Acceptance: duplicate item name (Intuit 6240) → HTTP 409 with a
+    QBO_DUPLICATE_* code, mirroring the invoice DocNumber pattern.
+    """
+    def handler(request):
+        return _duplicate_name_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_DUPLICATE_NAME"
+    assert "Coliform Test" in body["error"]["message"]
+    assert "qbo_detail" in body["error"]
+    assert "Duplicate Name" in body["error"]["qbo_detail"]
+
+
+def test_create_missing_required_field_returns_422(settings_env, token_store):
+    """Acceptance: missing required fields return 422 (income_account_id here)."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post("/v1/items", json={"name": "Coliform Test", "type": "Service"})
+    assert resp.status_code == 422
+
+
+def test_create_unknown_body_field_returns_422(settings_env, token_store):
+    """Acceptance: unknown body fields return 422 (strict, extra=forbid)."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={
+            "name": "Coliform Test",
+            "type": "Service",
+            "income_account_id": "79",
+            "unitprice": 75.0,  # typo for unit_price
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_create_invalid_type_returns_422(settings_env, token_store):
+    """type is constrained to Service/Inventory/NonInventory."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Widget", "income_account_id": "79"},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_propagates_qbo_5xx_as_502(settings_env, token_store):
+    def handler(request):
+        return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_create_non_duplicate_400_returns_502(settings_env, token_store):
+    """A 400 that isn't the duplicate-name fault is a generic upstream error."""
+    def handler(request):
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {"Message": "Some other validation", "code": "2020"}
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "QBO_ERROR"
+
+
+def test_create_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.post(
+        "/v1/items",
+        json={"name": "Coliform Test", "type": "Service", "income_account_id": "79"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- update (PUT) ----------
+
+
+def test_update_sparse_updates_and_returns_item(settings_env, token_store):
+    """Acceptance: PUT sparse-updates the provided fields and returns the item."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        return _post_response(_item("42", Name="Renamed", UnitPrice=99.0))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"name": "Renamed", "unit_price": 99.0})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["Id"] == "42"
+    assert body["data"]["Name"] == "Renamed"
+
+
+def test_update_sends_sparse_with_id_sync_token_and_only_provided_fields(
+    settings_env, token_store
+):
+    """Acceptance: only the provided fields are written; sparse + SyncToken set."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        body = json.loads(request.content)
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "3"
+        assert body["sparse"] is True
+        assert body["UnitPrice"] == 99.0
+        # name/type/income_account were not provided → must be absent.
+        assert "Name" not in body
+        assert "Type" not in body
+        assert "IncomeAccountRef" not in body
+        return _post_response(_item("42", UnitPrice=99.0))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"unit_price": 99.0})
+    assert resp.status_code == 200
+
+
+def test_update_maps_income_account_id_to_ref(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        body = json.loads(request.content)
+        assert body["IncomeAccountRef"] == {"value": "88"}
+        return _post_response(_item("42"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"income_account_id": "88"})
+    assert resp.status_code == 200
+
+
+def test_update_stale_sync_token_returns_409(settings_env, token_store):
+    """Acceptance: stale SyncToken (Intuit 5010) → HTTP 409."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"name": "Renamed"})
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+    assert "42" in body["error"]["message"]
+    assert "Stale Object" in body["error"]["qbo_detail"]
+
+
+def test_update_unknown_item_returns_404(settings_env, token_store):
+    """Acceptance: not found → 404. The GET phase reports the miss; POST must not fire."""
+    def handler(request):
+        assert request.method == "GET"
+        return _not_found_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/9999", json={"name": "Renamed"})
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_update_invalid_id_returns_400(settings_env, token_store):
+    """Acceptance: invalid (non-numeric) id → 400 INVALID_PARAM, no QBO call."""
+    def handler(request):
+        pytest.fail("QBO must not be hit for a malformed item id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/0;DROP", json={"name": "Renamed"})
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["code"] == "INVALID_PARAM"
+    assert "item_id" in body["error"]["message"].lower()
+
+
+def test_update_unknown_body_field_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"naem": "Renamed"})
+    assert resp.status_code == 422
+
+
+def test_update_empty_body_returns_422(settings_env, token_store):
+    """A sparse update with no fields is a no-op; reject it before hitting QBO."""
+    def handler(request):
+        pytest.fail("QBO must not be hit for an empty sparse update")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={})
+    assert resp.status_code == 422
+
+
+def test_update_duplicate_name_returns_409(settings_env, token_store):
+    """Renaming an item onto an existing name also surfaces Intuit 6240."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        return _duplicate_name_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put("/v1/items/42", json={"name": "Taken"})
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "QBO_DUPLICATE_NAME"
+
+
+def test_update_unauthenticated_returns_503(settings_env, tmp_path):
+    empty_store = FileTokenStore(path=tmp_path / "missing-tokens.json")
+
+    def handler(request):
+        pytest.fail("QBO should never be hit without auth")
+
+    client, _ = _make_client(empty_store, handler)
+    resp = client.put("/v1/items/42", json={"name": "Renamed"})
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- deactivate (DELETE) ----------
+
+
+def test_delete_sets_active_false_and_returns_item(settings_env, token_store):
+    """Acceptance: DELETE sets Active:false and returns the deactivated item."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        body = json.loads(request.content)
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "3"
+        assert body["sparse"] is True
+        assert body["Active"] is False
+        return _post_response(_item("42", Active=False))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/items/42")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["Id"] == "42"
+    assert body["data"]["Active"] is False
+
+
+def test_delete_already_inactive_passes_through(settings_env, token_store):
+    """Deactivating an already-inactive item passes QBO's response through
+    rather than masking it (Amendment 1 idempotency note).
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"Item": _item_for_update("42", Active=False)}
+            )
+        return _post_response(_item("42", Active=False))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/items/42")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["Active"] is False
+
+
+def test_delete_stale_sync_token_returns_409(settings_env, token_store):
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Item": _item_for_update("42")})
+        return _stale_sync_token_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/items/42")
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "QBO_STALE_SYNC_TOKEN"
+
+
+def test_delete_unknown_item_returns_404(settings_env, token_store):
+    def handler(request):
+        assert request.method == "GET"
+        return _not_found_response()
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/items/9999")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "9999" in body["error"]["message"]
+
+
+def test_delete_invalid_id_returns_400(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit for a malformed item id")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/items/not-a-number")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_PARAM"
