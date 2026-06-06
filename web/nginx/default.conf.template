@@ -29,9 +29,11 @@ server {
     add_header Referrer-Policy "no-referrer" always;
     add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" always;
 
-    # Liveness / startup probe — no file lookup.
+    # Liveness / startup probe — no file lookup. Use default_type (not
+    # add_header) for the content type so this location defines no add_header of
+    # its own and therefore still inherits the server-level security headers.
     location = /healthz {
-        add_header Content-Type text/plain;
+        default_type text/plain;
         return 200 "ok\n";
     }
 

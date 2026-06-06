@@ -346,15 +346,17 @@ def test_live_healthz_ok(nginx_server):
     assert "ok" in body.lower()
 
 
-def test_live_pages_carry_security_headers(nginx_server):
+@pytest.mark.parametrize("path", ["/", "/eula", "/privacy", "/healthz"])
+def test_live_pages_carry_security_headers(nginx_server, path):
+    """Every public endpoint — including /healthz — carries the security headers."""
     conn = http.client.HTTPConnection("127.0.0.1", nginx_server, timeout=5)
     try:
-        conn.request("GET", "/")
+        conn.request("GET", path)
         resp = conn.getresponse()
         resp.read()
         headers = {k.lower(): v for k, v in resp.getheaders()}
     finally:
         conn.close()
-    assert headers.get("x-frame-options") == "DENY"
-    assert headers.get("x-content-type-options") == "nosniff"
-    assert "default-src 'none'" in headers.get("content-security-policy", "")
+    assert headers.get("x-frame-options") == "DENY", f"{path} missing X-Frame-Options"
+    assert headers.get("x-content-type-options") == "nosniff", f"{path} missing X-Content-Type-Options"
+    assert "default-src 'none'" in headers.get("content-security-policy", ""), f"{path} missing CSP"
