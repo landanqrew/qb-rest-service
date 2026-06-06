@@ -318,7 +318,15 @@ def _load_invoice_for_write(
 
     invoice = resp.get("Invoice")
     if invoice is None:
-        return None, error_response("NOT_FOUND", f"Invoice {invoice_id} not found", 404)
+        # The GET already succeeded (HTTP 200), so a missing Invoice body is
+        # an upstream contract break, not proof the record is gone — QBO
+        # signals "not found" with a 400/404 fault that is_not_found() catches
+        # above. Surface it as 502 rather than a misleading 404.
+        return None, error_response(
+            "QBO_ERROR",
+            "QBO did not return an Invoice in the read response",
+            502,
+        )
     if invoice.get("Id") is None or invoice.get("SyncToken") is None:
         return None, error_response(
             "QBO_ERROR",
@@ -343,7 +351,7 @@ def _execute_invoice_write(
     everything else → 502. Returns the entity QBO echoes back (the updated
     invoice, or the delete confirmation stub) in the DetailResponse envelope.
     """
-    params = {"operation": operation} if operation else None
+    params = {"operation": operation} if operation is not None else None
     try:
         resp = client.post("invoice", json_body=body, params=params)
     except AuthError as exc:

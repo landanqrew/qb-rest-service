@@ -1593,3 +1593,24 @@ def test_void_unauthenticated_returns_503(settings_env, tmp_path):
     resp = client.post("/v1/invoices/42/void")
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "NOT_AUTHENTICATED"
+
+
+# ---------- shared read-then-write helper edge cases ----------
+
+
+def test_write_read_phase_missing_invoice_body_returns_502(settings_env, token_store):
+    """A 200 from the read phase with no Invoice key is an upstream contract
+    break, not a missing record (QBO signals not-found with a 400/404 fault).
+    It must surface as 502 QBO_ERROR rather than a misleading 404, and the
+    write POST must not fire. Exercised here via DELETE but shared by all four
+    invoice writes through _load_invoice_for_write.
+    """
+    def handler(request):
+        assert request.method == "GET"  # write POST must not fire
+        return httpx.Response(200, json={"time": "2026-02-15T10:00:00Z"})  # no Invoice
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.delete("/v1/invoices/42")
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["error"]["code"] == "QBO_ERROR"
