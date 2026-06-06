@@ -13,6 +13,7 @@ from qbsvc.config import Settings, get_settings
 from qbsvc.exceptions import APIError, AuthError, NotAuthenticatedError, RateLimitError
 
 BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
+SANDBOX_BASE_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
 MINOR_VERSION = "75"
 
 _log = logging.getLogger("qbsvc.qbo")
@@ -38,6 +39,13 @@ class QBClient:
         self._settings = settings or get_settings()
         self._tokens: TokenData | None = None
         self._http = httpx.Client(timeout=30)
+        # Sandbox realms live on a separate API host; the OAuth token
+        # endpoint is shared, so only the entity base URL switches.
+        self._base_url = (
+            SANDBOX_BASE_URL
+            if self._settings.intuit_environment == "sandbox"
+            else BASE_URL
+        )
         # When no shared bucket is injected, fall back to a per-instance one
         # sized off settings. Tests rely on this so they don't have to wire
         # one up every time; deps.py injects a process-wide bucket in prod
@@ -123,7 +131,7 @@ class QBClient:
             )
 
         tokens = self._ensure_tokens()
-        url = f"{BASE_URL}/{tokens.realm_id}/{endpoint}"
+        url = f"{self._base_url}/{tokens.realm_id}/{endpoint}"
 
         params = dict(params or {})
         params["minorversion"] = MINOR_VERSION

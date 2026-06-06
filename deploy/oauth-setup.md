@@ -43,6 +43,7 @@ Set on the qb-service deployment (Cloud Run env vars, `.env` locally):
 | ----------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
 | `QBSVC_INTUIT_CLIENT_ID`      | `ABxx...`                                               | From Intuit app **Keys & OAuth**.                                    |
 | `QBSVC_INTUIT_CLIENT_SECRET`  | `…`                                                     | Treat as secret. In prod, load from Secret Manager.                  |
+| `QBSVC_INTUIT_ENVIRONMENT`    | `production` (default) or `sandbox`                     | `sandbox` routes QBO entity calls to `sandbox-quickbooks.api.intuit.com`. Pair with the app's Development keys and a sandbox realm ID. |
 | `QBSVC_OAUTH_REDIRECT_URI`    | `https://<qb-service-domain>/admin/oauth/callback`      | **Must match** the URL registered in the Intuit console, byte-for-byte. |
 | `QBSVC_OAUTH_STATE_TTL_SECONDS` | `600` (default)                                       | How long a CSRF state token stays valid between `/start` and `/callback`. |
 | `QBSVC_TOKEN_BACKEND`         | `file` (dev) or `secret_manager` (prod)                 | Where the rotated refresh token is persisted.                        |
