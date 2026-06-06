@@ -61,11 +61,29 @@ Set on the qb-service deployment (Cloud Run env vars, `.env` locally):
 
 ## 3. Run the authorization flow
 
+> **Reality check (learned during the first bootstrap, 2026-06-06).** A plain
+> browser cannot attach a Cloud Run identity token, so with
+> `--no-allow-unauthenticated` the IAM edge 403s both `/admin/oauth/start`
+> and Intuit's redirect back to `/admin/oauth/callback`. Two extra pieces
+> make the flow work:
+>
+> 1. **Register a localhost redirect URI** (`http://localhost:8080/admin/oauth/callback`)
+>    in the Intuit console and set it as `QBSVC_OAUTH_REDIRECT_URI` on the
+>    service. Development keys allow plain-HTTP localhost URIs; production
+>    keys do not (open question for the production bootstrap).
+> 2. **Run a local forwarder that injects your identity token** and browse
+>    through `http://localhost:8080`. Note `gcloud run services proxy` does
+>    NOT work here — the token it mints fails the admin gate's email check.
+>    Forward with the raw token instead, e.g. a small localhost proxy that
+>    adds `Authorization: Bearer $(gcloud auth print-identity-token)` to
+>    each request and passes 30x redirects through to the browser
+>    unfollowed (the browser must follow the Intuit consent redirect).
+
 1. From a browser authenticated with an identity that has
    `roles/run.invoker` on `/admin/*` (see scope doc §7), navigate to:
 
    ```
-   https://<qb-service-domain>/admin/oauth/start
+   http://localhost:8080/admin/oauth/start   # through the local forwarder
    ```
 
 2. The service redirects to Intuit's consent screen. Sign in with the
