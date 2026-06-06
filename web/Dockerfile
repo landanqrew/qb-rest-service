@@ -14,7 +14,11 @@
 # is desirable. Reproducibility of a given deploy is provided downstream — the
 # qb-pages image is tagged by git SHA and stored in Artifact Registry (see
 # deploy/qb-pages.deploy.sh).
-FROM nginx:1.27-alpine
+#
+# The unprivileged variant runs the whole process tree as non-root (uid 101),
+# matching qb-service's non-root posture. Same entrypoint scripts, so the
+# envsubst template rendering below works identically.
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 # Default for local `docker run`; Cloud Run overrides $PORT at deploy time.
 ENV PORT=8080
