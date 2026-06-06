@@ -1,6 +1,6 @@
 # QB Service — Project Scope (Option B)
 
-**Status:** Draft for review · 2026-05-21
+**Status:** Draft for review · 2026-05-21 · Amended 2026-06-06 (Amendment 1: full CRUD surface — see amendment log)
 **Decision:** Locked on Option B (thin stateless REST proxy in front of QBO)
 **Repo plan:** Clone `quickbooks-cli` → new repo (working name `qb-service`). CLI stays where it is.
 
@@ -13,7 +13,7 @@ A small HTTP service that fronts the QuickBooks Online API for the Martin Water 
 ## 2. Goals
 
 - One place owns QBO auth + the REST client; web app never sees an Intuit token.
-- Web app can `GET` cached entities (customers, items, invoices) and `POST/PUT` invoices through a small, stable HTTP surface.
+- Web app can `GET` entities (customers, items, invoices), manage items (create/update/deactivate), and create/update/delete invoices and their lines through a small, stable HTTP surface. *(Amendment 1 — originally read + invoice `POST/PUT` only.)*
 - Deployable to GCP (Cloud Run preferred) with IAM-based service-to-service auth.
 - Reuse ~70% of the existing `qb/` codebase (client, auth flow, error handling, query builder).
 
@@ -108,11 +108,18 @@ All routes return JSON. All non-GET routes require a valid Google ID token (Clou
 | GET | `/customers/{id}` | Single customer |
 | GET | `/items` | List items/products. Query: `active`, `modified_since`, `limit`, `cursor` |
 | GET | `/items/{id}` | Single item |
+| POST | `/items` | Create item. Body: `{name, type, income_account_id, unit_price?, ...}` *(Amendment 1)* |
+| PUT | `/items/{id}` | Sparse update, SyncToken-aware *(Amendment 1)* |
+| DELETE | `/items/{id}` | Deactivate (`Active: false`) — QBO cannot hard-delete items *(Amendment 1)* |
 | GET | `/invoices` | List invoices. Query: `customer_id`, `doc_number`, `modified_since`, `limit`, `cursor` |
 | GET | `/invoices/{id}` | Single invoice |
 | POST | `/invoices` | Create invoice. Body: `{customer_id, doc_number, txn_date?, lines[], memo?}` |
 | POST | `/invoices/{id}/lines` | Append a line. Body: `{item_id, qty, rate?, description?}` |
-| PUT | `/invoices/{id}` | Full replace (deferred — add when web app needs it) |
+| PUT | `/invoices/{id}` | Full replace, SyncToken-aware *(Amendment 1 — previously deferred)* |
+| DELETE | `/invoices/{id}` | Delete invoice (QBO `operation=delete`), SyncToken-aware *(Amendment 1)* |
+| POST | `/invoices/{id}/void` | Void invoice (QBO `operation=void` — record survives at $0), SyncToken-aware *(Amendment 1)* |
+| PUT | `/invoices/{id}/lines/{line_id}` | Update one line — read-modify-write full update of the parent invoice *(Amendment 1)* |
+| DELETE | `/invoices/{id}/lines/{line_id}` | Remove one line — same read-modify-write mechanics *(Amendment 1)* |
 | GET | `/admin/oauth/start` | Begin Intuit OAuth flow (admin-gated, see §7) |
 | GET | `/admin/oauth/callback` | Intuit redirect target; exchanges code, writes refresh token to Secret Manager |
 
@@ -218,6 +225,9 @@ QBO limit: **500 req/min per realm**. With one realm and one consumer, unlikely 
 - **Reads:** trivially idempotent.
 - **Invoice create:** Intuit enforces `DocNumber` uniqueness, which gives natural deduplication — duplicate POST returns 6240 ("Duplicate Document Number"). We translate to HTTP 409. Web app retries are safe because the lab number is deterministic per job.
 - **Invoice line append:** not idempotent at the HTTP layer (two retries = two lines). Acceptable for v1 because the web app's create path is synchronous and human-driven; revisit only if we add async queues.
+- **Updates (item, invoice, line):** *(Amendment 1)* QBO's `SyncToken` gives optimistic concurrency — a stale token returns QBO error 5010 ("Stale Object"), which we translate to HTTP 409. Safe to retry: re-read, re-apply.
+- **Deletes:** *(Amendment 1)* idempotent in effect — deleting an already-deleted invoice (or deactivating an already-inactive item) surfaces as 404/409 from QBO; we pass through rather than masking.
+- **Line update/delete:** *(Amendment 1)* read-modify-write on the parent invoice, so there's a race window between the read and the write. The stale-SyncToken 409 closes it; acceptable with a single human-driven consumer.
 
 ## 13. Testing
 
@@ -241,6 +251,7 @@ QBO limit: **500 req/min per realm**. With one realm and one consumer, unlikely 
 | **1 — Token plumbing** | `TokenStore` protocol, file + Secret Manager backends, concurrent-safe refresh, `/admin/oauth/*` routes | Can complete OAuth via browser and do `GET /customers` end-to-end against Cloud Run |
 | **2 — Read endpoints** | `customers`, `items`, `invoices` GET routes + pagination + filters | Web app team can prototype against deployed service |
 | **3 — Write endpoints** | `POST /invoices`, `POST /invoices/{id}/lines` | Test invoice round-trips through sandbox + prod realm |
+| **3b — Extended writes** *(Amendment 1)* | `POST/PUT/DELETE /items/*`, `PUT/DELETE /invoices/{id}`, `POST /invoices/{id}/void`, `PUT/DELETE /invoices/{id}/lines/{line_id}` | Item lifecycle + invoice edit/void/delete round-trip through sandbox |
 | **4 — Hardening** | Structured logging, error envelope, rate limiter, IAM lockdown, observability | Ready for Lab Intake web app to depend on it |
 | **5 — Web app integration** | (Other repo) | Phase 3 of the Lab Intake diagram works end-to-end |
 
@@ -254,6 +265,7 @@ Estimate: Phases 0–4 are roughly a week of focused work for one person, gated 
 4. ~~Should the bootstrap refresh-token step live in this repo or stay in `quickbooks-cli`?~~ **Resolved:** qb-service owns the full OAuth flow via `/admin/oauth/*` (§8). No bootstrap CLI; the CLI keeps its own independent auth for its own use case.
 5. **Schema validation strictness on writes:** reject unknown fields (Pydantic `extra="forbid"`) or pass through? Recommendation: forbid, so the web app gets clear errors instead of silent drops.
 6. **Versioning:** prefix routes with `/v1/`? Recommendation: yes, cheap insurance.
+7. ~~**Invoice delete vs. void:** does the web app need void, delete, or both?~~ **Resolved (Amendment 1):** expose both — `DELETE /invoices/{id}` (hard delete) and `POST /invoices/{id}/void`. Which one the web app actually uses is its call; dropping the unused route later is cheap.
 
 ## 17. What we are *not* deciding now
 
@@ -262,6 +274,20 @@ Estimate: Phases 0–4 are roughly a week of focused work for one person, gated 
 - Drive folder provisioning. Out of scope for qb-service entirely — that's a separate concern (Google Drive API), not QBO.
 
 ---
+
+## Amendment log
+
+### Amendment 1 — 2026-06-06: full CRUD surface
+
+The Lab Intake requirements list asks for a wider write surface than v1 scoped: item create/update/delete, invoice update/delete, and line-item update/delete. This amendment adds those routes (§6), a delivery phase for them (§15, Phase 3b), idempotency notes (§12), and one new open question (§16 #7).
+
+**No OAuth change needed.** Intuit has no per-entity scopes; `com.intuit.quickbooks.accounting` already grants full read/write to every entity here. Entity/verb granularity is enforced entirely by which routes this service exposes.
+
+QBO constraints that shaped the route semantics:
+
+- **Items cannot be hard-deleted.** The API only supports `Active: false`. `DELETE /items/{id}` is therefore a deactivation; QBO appends "(deleted)" to the name of deactivated items it must disambiguate.
+- **Invoice delete removes the transaction.** QBO `operation=void` is the audit-friendly alternative (record survives at $0). We expose both — `DELETE /invoices/{id}` and `POST /invoices/{id}/void` — and let the web app pick; the unused route is cheap to drop later (§16 #7).
+- **No per-line API.** QBO has no line-item endpoints; updating or removing a line means a full update of the parent invoice (read current state, modify the `Line[]` array, write back with the fresh `SyncToken`). The `/invoices/{id}/lines/{line_id}` routes wrap that read-modify-write so the web app doesn't reimplement QBO's full-update semantics. `line_id` is QBO's stable `Line.Id` within the invoice.
 
 ## Review checklist
 
