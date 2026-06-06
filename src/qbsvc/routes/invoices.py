@@ -458,7 +458,15 @@ def replace_invoice(
     Body mirrors `InvoiceCreate` — strict (`extra="forbid"`) and every line
     must carry a rate. We read the current invoice for its SyncToken, then
     POST the new state without `sparse` so QBO replaces the record wholesale
-    rather than merging fields.
+    rather than merging fields. This replaces the `Line` array too: callers
+    wanting additive line changes should use `POST /invoices/{id}/lines`.
+
+    Because this is a replace and not a merge, the `Line` key is always sent
+    — including an explicit empty array when `lines` is empty — so the update
+    is unambiguous. (Contrast `create`, which omits `Line` on empty input
+    because QBO rejects an empty `Line` array on insert; a full update with
+    an omitted `Line` would instead risk silently preserving the existing
+    lines. If QBO rejects clearing the lines, its fault surfaces as a 502.)
     """
     if not _INVOICE_ID_RE.fullmatch(invoice_id):
         return error_response(
@@ -475,6 +483,10 @@ def replace_invoice(
     # Full update == the create body plus Id + SyncToken and no `sparse`
     # flag. QBO interprets the absence of `sparse` as "replace every field".
     qbo_body = _payload_to_qbo_body(payload)
+    # Force an explicit Line on the replace: _payload_to_qbo_body omits it
+    # when there are no lines, but a full update must state the lines so the
+    # replace is unambiguous rather than a silent preserve.
+    qbo_body.setdefault("Line", [])
     qbo_body["Id"] = invoice["Id"]
     qbo_body["SyncToken"] = invoice["SyncToken"]
     return _execute_invoice_write(client, qbo_body, invoice_id=invoice_id)

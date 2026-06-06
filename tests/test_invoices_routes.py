@@ -1247,6 +1247,31 @@ def test_put_sends_full_update_with_id_and_sync_token_no_sparse(settings_env, to
     assert resp.status_code == 200
 
 
+def test_put_with_empty_lines_sends_explicit_empty_line_array(settings_env, token_store):
+    """PUT is a full replace, not a merge: a body with no lines must send an
+    explicit `Line: []` so QBO is told to clear the lines rather than
+    (ambiguously) preserving the existing ones. This contrasts with create,
+    which omits the Line key on empty input. If QBO rejects a zero-line
+    invoice, its fault surfaces through the normal write error mapping.
+    """
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        body = json.loads(request.content)
+        assert body["Line"] == []
+        assert body["Id"] == "42"
+        assert body["SyncToken"] == "3"
+        assert body.get("sparse") is not True
+        return _post_response(_invoice("42", SyncToken="4"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={"customer_id": "55", "doc_number": "26-02-0042"},  # no lines
+    )
+    assert resp.status_code == 200
+
+
 def test_put_invalid_id_rejected_without_hitting_qbo(settings_env, token_store):
     def handler(request):
         pytest.fail("QBO must not be hit for malformed invoice_id")
