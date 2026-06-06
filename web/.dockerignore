@@ -1,9 +1,10 @@
-# qb-pages build context is just the static pages + nginx config. Keep
-# everything else out so the image can never accidentally pick up source,
-# secrets, or tooling from the rest of the repo.
+# qb-pages build context is the static pages + nginx config, nothing else.
+# Whitelisting individual files (not the whole nginx/ directory) keeps the
+# blast radius fixed: a stray file later dropped into web/nginx/ cannot slip
+# into the image. Docker re-includes the named nested file without needing the
+# parent directory to be un-ignored.
 *
 !index.html
 !eula.html
 !privacy.html
-!nginx/
 !nginx/default.conf.template

@@ -11,10 +11,23 @@
 # that is the whole point of qb-pages: a fixed, boring blast radius.
 
 server {
+    # Cloud Run (gen2) may route to the container over IPv6, so listen on both
+    # stacks. nginx defaults the IPv6 socket to ipv6only=on, so the two listens
+    # don't collide.
     listen       ${PORT};
+    listen       [::]:${PORT};
     server_name  _;
 
     root /usr/share/nginx/html;
+
+    # Harden the public surface: static HTML, no scripts, no framing, no
+    # external resources. Inherited by the page locations below (which set no
+    # add_header of their own). The CSP allows only the inline <style> blocks
+    # the pages use.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" always;
 
     # Liveness / startup probe — no file lookup.
     location = /healthz {

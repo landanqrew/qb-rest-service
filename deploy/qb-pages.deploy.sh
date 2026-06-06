@@ -76,7 +76,13 @@ echo "  Host (launch) URL : ${URL}/"
 echo "  EULA URL          : ${URL}/eula"
 echo "  Privacy policy URL: ${URL}/privacy"
 echo
-echo "Smoke test (no auth — these are public):"
-echo "  curl -sS -o /dev/null -w '%{http_code}\\n' ${URL}/"
-echo "  curl -sS -o /dev/null -w '%{http_code}\\n' ${URL}/eula"
-echo "  curl -sS -o /dev/null -w '%{http_code}\\n' ${URL}/privacy"
+echo "==> Smoke test (no auth — these are public):"
+for path in / /eula /privacy /healthz; do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "${URL}${path}")"
+  echo "  ${path} -> ${code}"
+  if [[ "${code}" != "200" ]]; then
+    echo "ERROR: ${URL}${path} returned ${code}, expected 200" >&2
+    exit 1
+  fi
+done
+echo "Smoke tests passed."

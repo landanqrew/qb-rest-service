@@ -9,6 +9,11 @@
 # startup, so ${PORT} in the config is filled from the port Cloud Run injects
 # (default 8080). Nothing else is templated.
 
+# Pinned to the 1.27 minor tag rather than a sha256 digest on purpose: this is a
+# public-facing nginx, so picking up patch-level security fixes on each rebuild
+# is desirable. Reproducibility of a given deploy is provided downstream — the
+# qb-pages image is tagged by git SHA and stored in Artifact Registry (see
+# deploy/qb-pages.deploy.sh).
 FROM nginx:1.27-alpine
 
 # Default for local `docker run`; Cloud Run overrides $PORT at deploy time.

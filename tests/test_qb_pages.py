@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import http.client
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -149,6 +150,23 @@ def test_nginx_template_serves_clean_urls():
         assert route in text
 
 
+def test_nginx_template_listens_on_ipv6():
+    """Cloud Run gen2 may route over IPv6; the server must bind both stacks."""
+    text = (WEB / "nginx" / "default.conf.template").read_text(encoding="utf-8")
+    assert "listen       ${PORT};" in text or "listen ${PORT};" in text
+    assert "[::]:${PORT}" in text
+
+
+def test_nginx_template_sets_security_headers():
+    text = (WEB / "nginx" / "default.conf.template").read_text(encoding="utf-8")
+    for header in (
+        "X-Content-Type-Options",
+        "X-Frame-Options",
+        "Content-Security-Policy",
+    ):
+        assert header in text
+
+
 def test_qb_pages_cloud_run_yaml_is_locked_down():
     yaml = DEPLOY / "qb-pages.cloud-run.yaml"
     assert yaml.is_file(), "deploy/qb-pages.cloud-run.yaml must exist"
@@ -201,12 +219,14 @@ def _free_port() -> int:
 def _render_server_conf(template: str, port: int, root: Path) -> str:
     """Render the nginx server block the way the container's envsubst would.
 
-    Substitutes ${PORT} and repoints the docroot at a local directory so the
-    test can serve the repo's HTML without /usr/share/nginx/html.
+    The container listens on IPv4+IPv6 across all interfaces via ${PORT}; the
+    test only needs a single IPv4 loopback socket on an ephemeral port. So we
+    drop the IPv6 listener, bind the IPv4 one to 127.0.0.1, fill in ${PORT}, and
+    repoint the docroot at a local directory (no /usr/share/nginx/html needed).
     """
-    rendered = template.replace("${PORT}", str(port))
-    rendered = rendered.replace("listen ${PORT}", f"listen 127.0.0.1:{port}")
-    rendered = rendered.replace("listen 127.0.0.1:%d" % port, f"listen 127.0.0.1:{port}")
+    rendered = re.sub(r"\n[ \t]*listen[ \t]+\[::\]:\$\{PORT\};", "", template)
+    rendered = re.sub(r"listen[ \t]+\$\{PORT\}", f"listen 127.0.0.1:{port}", rendered)
+    rendered = rendered.replace("${PORT}", str(port))
     rendered = rendered.replace("/usr/share/nginx/html", str(root))
     return rendered
 
@@ -324,3 +344,17 @@ def test_live_healthz_ok(nginx_server):
     status, _ctype, body = _get(nginx_server, "/healthz")
     assert status == 200
     assert "ok" in body.lower()
+
+
+def test_live_pages_carry_security_headers(nginx_server):
+    conn = http.client.HTTPConnection("127.0.0.1", nginx_server, timeout=5)
+    try:
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        resp.read()
+        headers = {k.lower(): v for k, v in resp.getheaders()}
+    finally:
+        conn.close()
+    assert headers.get("x-frame-options") == "DENY"
+    assert headers.get("x-content-type-options") == "nosniff"
+    assert "default-src 'none'" in headers.get("content-security-policy", "")
