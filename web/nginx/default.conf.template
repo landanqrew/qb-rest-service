@@ -1,0 +1,58 @@
+# nginx server block for qb-pages.
+#
+# The official nginx image runs envsubst over /etc/nginx/templates/*.template at
+# container start, writing the result to /etc/nginx/conf.d/. Only environment
+# variables that are actually set are substituted, so ${PORT} is filled from the
+# port Cloud Run injects (default 8080) while nginx's own runtime variables are
+# left untouched. We deliberately use only literal try_files targets here so the
+# config has no nginx $variables to protect.
+#
+# Surface is exactly three pages plus a health check. Anything else is a 404 —
+# that is the whole point of qb-pages: a fixed, boring blast radius.
+
+server {
+    # Cloud Run (gen2) may route to the container over IPv6, so listen on both
+    # stacks. nginx defaults the IPv6 socket to ipv6only=on, so the two listens
+    # don't collide.
+    listen       ${PORT};
+    listen       [::]:${PORT};
+    server_name  _;
+
+    root /usr/share/nginx/html;
+
+    # Harden the public surface: static HTML, no scripts, no framing, no
+    # external resources. Inherited by the page locations below (which set no
+    # add_header of their own). The CSP allows only the inline <style> blocks
+    # the pages use.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" always;
+
+    # Liveness / startup probe — no file lookup. Use default_type (not
+    # add_header) for the content type so this location defines no add_header of
+    # its own and therefore still inherits the server-level security headers.
+    location = /healthz {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Landing page.
+    location = / {
+        try_files /index.html =404;
+    }
+
+    # Clean URLs for the two legal pages Intuit requires.
+    location = /eula {
+        try_files /eula.html =404;
+    }
+
+    location = /privacy {
+        try_files /privacy.html =404;
+    }
+
+    # Keep the surface fixed: everything else is a 404.
+    location / {
+        return 404;
+    }
+}

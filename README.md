@@ -35,6 +35,26 @@ src/qbsvc/
     └── health.py    # /healthz, /readyz
 ```
 
+## Public pages companion (`qb-pages`)
+
+`qb-service` is IAM-locked, so it can't host the public landing / EULA / privacy
+URLs Intuit requires for production-app review. Those live in a separate, minimal
+Cloud Run service, `qb-pages`, whose entire surface is three static HTML files
+(`web/`). It has no QBO access, no secrets, and a permission-less service
+account — "public" only ever means three HTML pages.
+
+Deploy it with:
+
+```bash
+export GCP_PROJECT=your-project-id
+./deploy/qb-pages.deploy.sh
+```
+
+See [`deploy/qb-pages-setup.md`](deploy/qb-pages-setup.md) for the full setup
+(permission-less service account, Intuit URL registration, local `docker run`
+verification). The EULA and privacy drafts are boilerplate marked **DRAFT** and
+need human review before Intuit submission.
+
 ## Related projects
 
 - [`quickbooks-cli`](../quickbooks-cli) — the laptop CLI this service was forked from. Different use case, independent auth.
