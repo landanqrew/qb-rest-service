@@ -289,9 +289,9 @@ def _load_invoice_for_write(
 ) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     """Read the current invoice so a write can reuse its SyncToken.
 
-    Every invoice write (line append, full replace, delete, void) is a
-    read-then-write against QBO's optimistic-concurrency model, so they all
-    share this GET phase. Returns `(invoice, None)` on success or
+    Every invoice write (line append/update/delete, full replace, delete,
+    void) is a read-then-write against QBO's optimistic-concurrency model, so
+    they all share this GET phase. Returns `(invoice, None)` on success or
     `(None, error_response)` with the failure mapped to the shared
     conventions: missing invoice → 404, auth/token-store → 503, rate limit →
     429, everything else → 502. The returned invoice is guaranteed to carry
@@ -317,14 +317,16 @@ def _load_invoice_for_write(
         return None, error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
 
     invoice = resp.get("Invoice")
-    if invoice is None:
-        # The GET already succeeded (HTTP 200), so a missing Invoice body is
+    if not isinstance(invoice, dict):
+        # The GET already succeeded (HTTP 200), so a missing or malformed
+        # Invoice body (absent key, or a non-object like `{"Invoice": []}`) is
         # an upstream contract break, not proof the record is gone — QBO
         # signals "not found" with a 400/404 fault that is_not_found() catches
-        # above. Surface it as 502 rather than a misleading 404.
+        # above. Surface it as 502 rather than a misleading 404 or an
+        # unhandled 500 from dereferencing a non-dict.
         return None, error_response(
             "QBO_ERROR",
-            "QBO did not return an Invoice in the read response",
+            "QBO did not return a valid Invoice object in the read response",
             502,
         )
     if invoice.get("Id") is None or invoice.get("SyncToken") is None:
@@ -345,9 +347,9 @@ def _execute_invoice_write(
 ) -> JSONResponse:
     """POST the write phase of an invoice mutation and wrap the result.
 
-    Shared by the append / full-replace / delete / void handlers so the
-    QBO-fault → HTTP mapping stays uniform: stale SyncToken (5010) → 409,
-    missing invoice → 404, auth/token-store → 503, rate limit → 429,
+    Shared by the append / line-edit / full-replace / delete / void handlers
+    so the QBO-fault → HTTP mapping stays uniform: stale SyncToken (5010) →
+    409, missing invoice → 404, auth/token-store → 503, rate limit → 429,
     everything else → 502. Returns the entity QBO echoes back (the updated
     invoice, or the delete confirmation stub) in the DetailResponse envelope.
     """
@@ -415,6 +417,35 @@ def _append_line_to_qbo(line: InvoiceLineAppend) -> dict[str, Any]:
     return qbo_line
 
 
+# QBO Line.Id is a stable, server-assigned numeric string scoped to the
+# invoice. Pin it to digits for the same reason as the entity ids: keep any
+# quote / path meta-character out of the URL segment and the line lookup.
+_LINE_ID_RE = re.compile(r"^\d{1,20}$")
+
+
+def _write_invoice_lines(
+    client: QBClient,
+    invoice_id: str,
+    invoice_id_val: str,
+    sync_token_val: str,
+    new_lines: list[dict[str, Any]],
+) -> JSONResponse:
+    """Sparse-update the invoice's `Line[]` and return the standard envelope.
+
+    Shared by the append, line-update, and line-delete flows: each is a
+    read-modify-write that hands QBO the full replacement `Line` array with a
+    fresh SyncToken. The QBO-fault → HTTP mapping (notably stale SyncToken →
+    409) lives in `_execute_invoice_write`.
+    """
+    sparse_body: dict[str, Any] = {
+        "Id": invoice_id_val,
+        "SyncToken": sync_token_val,
+        "sparse": True,
+        "Line": new_lines,
+    }
+    return _execute_invoice_write(client, sparse_body, invoice_id=invoice_id)
+
+
 @router.post("/{invoice_id}/lines")
 def append_invoice_line(
     invoice_id: str,
@@ -436,15 +467,11 @@ def append_invoice_line(
         return err
     assert invoice is not None  # narrow for the type checker
 
-    existing_lines = invoice.get("Line") or []
-    new_lines = _strip_subtotal_lines(existing_lines) + [_append_line_to_qbo(payload)]
-    sparse_body: dict[str, Any] = {
-        "Id": invoice["Id"],
-        "SyncToken": invoice["SyncToken"],
-        "sparse": True,
-        "Line": new_lines,
-    }
-    return _execute_invoice_write(client, sparse_body, invoice_id=invoice_id)
+    existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
+    new_lines = [*existing_lines, _append_line_to_qbo(payload)]
+    return _write_invoice_lines(
+        client, invoice_id, invoice["Id"], invoice["SyncToken"], new_lines
+    )
 
 
 @router.put("/{invoice_id}")
@@ -547,4 +574,129 @@ def void_invoice(
     void_body = {"Id": invoice["Id"], "SyncToken": invoice["SyncToken"]}
     return _execute_invoice_write(
         client, void_body, invoice_id=invoice_id, operation="void"
+    )
+
+
+def _validate_invoice_and_line_ids(
+    invoice_id: str, line_id: str
+) -> JSONResponse | None:
+    """Shared id guard for the per-line routes. Returns an error envelope when
+    either id is malformed, else None."""
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
+    if not _LINE_ID_RE.fullmatch(line_id):
+        return error_response(
+            "INVALID_PARAM",
+            "line_id must be a numeric QBO line id",
+            400,
+        )
+    return None
+
+
+def _find_line_index(lines: list[dict[str, Any]], line_id: str) -> int | None:
+    """Index of the line whose `Line.Id` equals `line_id`, or None. QBO stores
+    Id as a string but we compare stringwise to be robust to either shape.
+    Lines without an Id (e.g. the SubTotal row) are skipped explicitly rather
+    than coerced to the string "None", which would falsely match line_id="None"
+    if this helper is ever reused without the `_LINE_ID_RE` digit guard."""
+    for index, line in enumerate(lines):
+        existing_id = line.get("Id")
+        if existing_id is not None and str(existing_id) == line_id:
+            return index
+    return None
+
+
+def _replace_line_to_qbo(line: InvoiceLineAppend, line_id: str) -> dict[str, Any]:
+    # Same line shape as the append flow, but we re-attach the existing
+    # Line.Id so QBO updates the row in place rather than dropping it and
+    # minting a new one (which would renumber it and lose its identity).
+    qbo_line = _append_line_to_qbo(line)
+    qbo_line["Id"] = line_id
+    return qbo_line
+
+
+@router.put("/{invoice_id}/lines/{line_id}")
+def update_invoice_line(
+    invoice_id: str,
+    line_id: str,
+    payload: InvoiceLineAppend,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    """Replace a single line on an existing invoice.
+
+    QBO has no per-line API, so this is a read-modify-write of the parent
+    invoice: read the current Line array, swap the matching line in place,
+    and sparse-update back with the fresh SyncToken (scope §6, Amendment 1).
+    """
+    invalid = _validate_invoice_and_line_ids(invoice_id, line_id)
+    if invalid is not None:
+        return invalid
+
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
+        return err
+    assert invoice is not None  # narrow for the type checker
+
+    existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
+    index = _find_line_index(existing_lines, line_id)
+    if index is None:
+        return error_response(
+            "NOT_FOUND",
+            f"Line {line_id} not found on invoice {invoice_id}",
+            404,
+        )
+
+    new_lines = list(existing_lines)
+    new_lines[index] = _replace_line_to_qbo(payload, line_id)
+    return _write_invoice_lines(
+        client, invoice_id, invoice["Id"], invoice["SyncToken"], new_lines
+    )
+
+
+@router.delete("/{invoice_id}/lines/{line_id}")
+def delete_invoice_line(
+    invoice_id: str,
+    line_id: str,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    """Remove a single line from an existing invoice via the same
+    read-modify-write as the update flow, minus the replacement."""
+    invalid = _validate_invoice_and_line_ids(invoice_id, line_id)
+    if invalid is not None:
+        return invalid
+
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
+        return err
+    assert invoice is not None  # narrow for the type checker
+
+    existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
+    index = _find_line_index(existing_lines, line_id)
+    if index is None:
+        return error_response(
+            "NOT_FOUND",
+            f"Line {line_id} not found on invoice {invoice_id}",
+            404,
+        )
+
+    new_lines = [line for i, line in enumerate(existing_lines) if i != index]
+    if not new_lines:
+        # QBO rejects an invoice with an empty Line array (it comes back as an
+        # opaque 5xx we'd pass through as 502). Catch the invariant up front and
+        # tell the caller to delete the invoice instead — see issue acceptance.
+        return error_response(
+            "CANNOT_DELETE_LAST_LINE",
+            (
+                f"Line {line_id} is the only line on invoice {invoice_id}; "
+                "an invoice must keep at least one line. Delete the invoice "
+                "instead of its last line."
+            ),
+            409,
+        )
+    return _write_invoice_lines(
+        client, invoice_id, invoice["Id"], invoice["SyncToken"], new_lines
     )
