@@ -284,6 +284,120 @@ def _is_stale_sync_token(exc: APIError) -> bool:
     return False
 
 
+def _load_invoice_for_write(
+    client: QBClient, invoice_id: str
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    """Read the current invoice so a write can reuse its SyncToken.
+
+    Every invoice write (line append/update/delete, full replace, delete,
+    void) is a read-then-write against QBO's optimistic-concurrency model, so
+    they all share this GET phase. Returns `(invoice, None)` on success or
+    `(None, error_response)` with the failure mapped to the shared
+    conventions: missing invoice → 404, auth/token-store → 503, rate limit →
+    429, everything else → 502. The returned invoice is guaranteed to carry
+    both `Id` and `SyncToken`; a 200 with either missing (a QBO beta-API
+    quirk) is surfaced as a clean 502 rather than a downstream KeyError.
+    """
+    try:
+        resp = client.get(f"invoice/{invoice_id}")
+    except AuthError as exc:
+        return None, error_response(exc.code, str(exc), 503)
+    except TokenStoreError as exc:
+        return None, error_response("TOKEN_STORE_FAILED", str(exc), 503)
+    except RateLimitError as exc:
+        return None, error_response("RATE_LIMITED", str(exc), 429)
+    except APIError as exc:
+        if is_not_found(exc):
+            return None, error_response(
+                "NOT_FOUND",
+                f"Invoice {invoice_id} not found",
+                404,
+                qbo_detail=exc.detail,
+            )
+        return None, error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
+
+    invoice = resp.get("Invoice")
+    if not isinstance(invoice, dict):
+        # The GET already succeeded (HTTP 200), so a missing or malformed
+        # Invoice body (absent key, or a non-object like `{"Invoice": []}`) is
+        # an upstream contract break, not proof the record is gone — QBO
+        # signals "not found" with a 400/404 fault that is_not_found() catches
+        # above. Surface it as 502 rather than a misleading 404 or an
+        # unhandled 500 from dereferencing a non-dict.
+        return None, error_response(
+            "QBO_ERROR",
+            "QBO did not return a valid Invoice object in the read response",
+            502,
+        )
+    if invoice.get("Id") is None or invoice.get("SyncToken") is None:
+        return None, error_response(
+            "QBO_ERROR",
+            "QBO returned an invoice with a missing Id or SyncToken",
+            502,
+        )
+    return invoice, None
+
+
+def _execute_invoice_write(
+    client: QBClient,
+    body: dict[str, Any],
+    *,
+    invoice_id: str,
+    operation: str | None = None,
+) -> JSONResponse:
+    """POST the write phase of an invoice mutation and wrap the result.
+
+    Shared by the append / line-edit / full-replace / delete / void handlers
+    so the QBO-fault → HTTP mapping stays uniform: stale SyncToken (5010) →
+    409, missing invoice → 404, auth/token-store → 503, rate limit → 429,
+    everything else → 502. Returns the entity QBO echoes back (the updated
+    invoice, or the delete confirmation stub) in the DetailResponse envelope.
+    """
+    params = {"operation": operation} if operation is not None else None
+    try:
+        resp = client.post("invoice", json_body=body, params=params)
+    except AuthError as exc:
+        return error_response(exc.code, str(exc), 503)
+    except TokenStoreError as exc:
+        return error_response("TOKEN_STORE_FAILED", str(exc), 503)
+    except RateLimitError as exc:
+        return error_response("RATE_LIMITED", str(exc), 429)
+    except APIError as exc:
+        if _is_stale_sync_token(exc):
+            return error_response(
+                "QBO_STALE_SYNC_TOKEN",
+                (
+                    f"Invoice {invoice_id} was modified by another writer; "
+                    "re-fetch and retry the write"
+                ),
+                409,
+                qbo_detail=exc.detail,
+            )
+        if is_not_found(exc):
+            return error_response(
+                "NOT_FOUND",
+                f"Invoice {invoice_id} not found",
+                404,
+                qbo_detail=exc.detail,
+            )
+        return error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
+
+    entity = resp.get("Invoice")
+    if not isinstance(entity, dict):
+        # Mirror the read-phase guard: a 200 whose Invoice body is missing or a
+        # non-object (e.g. `{"Invoice": []}`) is an upstream contract break.
+        # Surface 502 rather than crash in DetailResponse(data=entity) and
+        # leak an unhandled 500.
+        return error_response(
+            "QBO_ERROR",
+            "QBO did not return a valid Invoice object in the write response",
+            502,
+        )
+
+    body_env = DetailResponse(data=entity)
+    return JSONResponse(status_code=200, content=body_env.model_dump(exclude_none=True))
+
+
 def _append_line_to_qbo(line: InvoiceLineAppend) -> dict[str, Any]:
     # Mirrors `_line_to_qbo` but tuned for the append flow: when `rate` is
     # omitted we deliberately leave both `UnitPrice` and `Amount` off the
@@ -313,51 +427,6 @@ def _append_line_to_qbo(line: InvoiceLineAppend) -> dict[str, Any]:
 _LINE_ID_RE = re.compile(r"^\d{1,20}$")
 
 
-def _load_invoice_for_edit(
-    client: QBClient, invoice_id: str
-) -> tuple[dict[str, Any] | None, JSONResponse | None]:
-    """Read the parent invoice for a read-modify-write line operation.
-
-    Every line write (append, update, delete) is a sparse update of the whole
-    `Line[]` array, which needs the current SyncToken and the existing lines.
-    Returns `(invoice, None)` when the invoice is present and carries the Id +
-    SyncToken needed to write back, or `(None, error_response)` with the right
-    envelope (404 / 502 / 503 / 429) otherwise.
-    """
-    try:
-        get_resp = client.get(f"invoice/{invoice_id}")
-    except AuthError as exc:
-        return None, error_response(exc.code, str(exc), 503)
-    except TokenStoreError as exc:
-        return None, error_response("TOKEN_STORE_FAILED", str(exc), 503)
-    except RateLimitError as exc:
-        return None, error_response("RATE_LIMITED", str(exc), 429)
-    except APIError as exc:
-        if is_not_found(exc):
-            return None, error_response(
-                "NOT_FOUND",
-                f"Invoice {invoice_id} not found",
-                404,
-                qbo_detail=exc.detail,
-            )
-        return None, error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
-
-    invoice = get_resp.get("Invoice")
-    if invoice is None:
-        return None, error_response("NOT_FOUND", f"Invoice {invoice_id} not found", 404)
-
-    # Guard against a 200 with a partial Invoice body — QBO has shipped
-    # beta-API quirks where optional fields drop out, and a write-back missing
-    # Id/SyncToken would surface as an opaque downstream error.
-    if invoice.get("Id") is None or invoice.get("SyncToken") is None:
-        return None, error_response(
-            "QBO_ERROR",
-            "QBO returned an invoice with a missing Id or SyncToken",
-            502,
-        )
-    return invoice, None
-
-
 def _write_invoice_lines(
     client: QBClient,
     invoice_id: str,
@@ -369,8 +438,8 @@ def _write_invoice_lines(
 
     Shared by the append, line-update, and line-delete flows: each is a
     read-modify-write that hands QBO the full replacement `Line` array with a
-    fresh SyncToken. A stale-token race (QBO 5010) maps to 409 so the caller
-    can re-read and retry.
+    fresh SyncToken. The QBO-fault → HTTP mapping (notably stale SyncToken →
+    409) lives in `_execute_invoice_write`.
     """
     sparse_body: dict[str, Any] = {
         "Id": invoice_id_val,
@@ -378,38 +447,7 @@ def _write_invoice_lines(
         "sparse": True,
         "Line": new_lines,
     }
-
-    try:
-        post_resp = client.post("invoice", json_body=sparse_body)
-    except AuthError as exc:
-        return error_response(exc.code, str(exc), 503)
-    except TokenStoreError as exc:
-        return error_response("TOKEN_STORE_FAILED", str(exc), 503)
-    except RateLimitError as exc:
-        return error_response("RATE_LIMITED", str(exc), 429)
-    except APIError as exc:
-        if _is_stale_sync_token(exc):
-            return error_response(
-                "QBO_STALE_SYNC_TOKEN",
-                (
-                    f"Invoice {invoice_id} was modified by another writer; "
-                    "re-fetch and retry"
-                ),
-                409,
-                qbo_detail=exc.detail,
-            )
-        return error_response("QBO_ERROR", str(exc), 502, qbo_detail=exc.detail)
-
-    updated = post_resp.get("Invoice")
-    if updated is None:
-        return error_response(
-            "QBO_ERROR",
-            "QBO did not return an Invoice in the sparse-update response",
-            502,
-        )
-
-    body = DetailResponse(data=updated)
-    return JSONResponse(status_code=200, content=body.model_dump(exclude_none=True))
+    return _execute_invoice_write(client, sparse_body, invoice_id=invoice_id)
 
 
 @router.post("/{invoice_id}/lines")
@@ -428,18 +466,118 @@ def append_invoice_line(
     # Sparse update needs the current SyncToken and the existing Line array
     # — QBO replaces Line wholesale when sparse=true names it, so we read,
     # mutate, and write back in one round-trip.
-    invoice, err = _load_invoice_for_edit(client, invoice_id)
-    if invoice is None:
-        # `_load_invoice_for_edit` only returns invoice=None alongside a
-        # populated error envelope; assert it so type-checkers can see the
-        # `return err` below never leaks a None response.
-        assert err is not None
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
         return err
+    assert invoice is not None  # narrow for the type checker
 
     existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
     new_lines = [*existing_lines, _append_line_to_qbo(payload)]
     return _write_invoice_lines(
         client, invoice_id, invoice["Id"], invoice["SyncToken"], new_lines
+    )
+
+
+@router.put("/{invoice_id}")
+def replace_invoice(
+    invoice_id: str,
+    payload: InvoiceCreate,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    """Full replace of an invoice (QBO full update).
+
+    Body mirrors `InvoiceCreate` — strict (`extra="forbid"`) and every line
+    must carry a rate. We read the current invoice for its SyncToken, then
+    POST the new state without `sparse` so QBO replaces the record wholesale
+    rather than merging fields. This replaces the `Line` array too: callers
+    wanting additive line changes should use `POST /invoices/{id}/lines`.
+
+    Because this is a replace and not a merge, the `Line` key is always sent
+    — including an explicit empty array when `lines` is empty — so the update
+    is unambiguous. (Contrast `create`, which omits `Line` on empty input
+    because QBO rejects an empty `Line` array on insert; a full update with
+    an omitted `Line` would instead risk silently preserving the existing
+    lines. If QBO rejects clearing the lines, its fault surfaces as a 502.)
+    """
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
+
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
+        return err
+    assert invoice is not None  # narrow for the type checker
+
+    # Full update == the create body plus Id + SyncToken and no `sparse`
+    # flag. QBO interprets the absence of `sparse` as "replace every field".
+    qbo_body = _payload_to_qbo_body(payload)
+    # Force an explicit Line on the replace: _payload_to_qbo_body omits it
+    # when there are no lines, but a full update must state the lines so the
+    # replace is unambiguous rather than a silent preserve.
+    qbo_body.setdefault("Line", [])
+    qbo_body["Id"] = invoice["Id"]
+    qbo_body["SyncToken"] = invoice["SyncToken"]
+    return _execute_invoice_write(client, qbo_body, invoice_id=invoice_id)
+
+
+@router.delete("/{invoice_id}")
+def delete_invoice(
+    invoice_id: str,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    """Hard-delete an invoice via QBO `operation=delete`.
+
+    Deleting an already-deleted invoice surfaces QBO's own error (the GET
+    phase returns 404) rather than masking it. Returns QBO's delete
+    confirmation stub in the standard envelope.
+    """
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
+
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
+        return err
+    assert invoice is not None  # narrow for the type checker
+
+    delete_body = {"Id": invoice["Id"], "SyncToken": invoice["SyncToken"]}
+    return _execute_invoice_write(
+        client, delete_body, invoice_id=invoice_id, operation="delete"
+    )
+
+
+@router.post("/{invoice_id}/void")
+def void_invoice(
+    invoice_id: str,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    """Void an invoice via QBO `operation=void`.
+
+    Same read-then-write mechanics as delete, but the record survives at $0
+    instead of being removed — the audit-friendly alternative (scope §16 #7).
+    Returns the voided invoice in the standard envelope.
+    """
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
+
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
+        return err
+    assert invoice is not None  # narrow for the type checker
+
+    void_body = {"Id": invoice["Id"], "SyncToken": invoice["SyncToken"]}
+    return _execute_invoice_write(
+        client, void_body, invoice_id=invoice_id, operation="void"
     )
 
 
@@ -502,13 +640,10 @@ def update_invoice_line(
     if invalid is not None:
         return invalid
 
-    invoice, err = _load_invoice_for_edit(client, invoice_id)
-    if invoice is None:
-        # `_load_invoice_for_edit` only returns invoice=None alongside a
-        # populated error envelope; assert it so type-checkers can see the
-        # `return err` below never leaks a None response.
-        assert err is not None
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
         return err
+    assert invoice is not None  # narrow for the type checker
 
     existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
     index = _find_line_index(existing_lines, line_id)
@@ -538,13 +673,10 @@ def delete_invoice_line(
     if invalid is not None:
         return invalid
 
-    invoice, err = _load_invoice_for_edit(client, invoice_id)
-    if invoice is None:
-        # `_load_invoice_for_edit` only returns invoice=None alongside a
-        # populated error envelope; assert it so type-checkers can see the
-        # `return err` below never leaks a None response.
-        assert err is not None
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
         return err
+    assert invoice is not None  # narrow for the type checker
 
     existing_lines = _strip_subtotal_lines(invoice.get("Line") or [])
     index = _find_line_index(existing_lines, line_id)
