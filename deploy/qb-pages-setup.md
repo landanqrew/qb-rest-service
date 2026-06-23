@@ -28,17 +28,18 @@ The whole point is that "public" only ever means three static HTML files.
 ```
 web/
 ├── index.html                  # Landing page: names the app + its purpose
-├── eula.html                   # EULA  (DRAFT — needs Landan's review)
-├── privacy.html                # Privacy policy (DRAFT — needs Landan's review)
+├── eula.html                   # EULA  (template — needs operator review)
+├── privacy.html                # Privacy policy (template — needs operator review)
 ├── nginx/default.conf.template # Serves /, /eula, /privacy, /healthz; 404 else
 ├── Dockerfile                  # nginx:alpine static server, honors $PORT
 └── .dockerignore               # Build context limited to the files above
 ```
 
-> **DRAFT legal text:** `eula.html` and `privacy.html` are boilerplate for an
-> internal, single-tenant business integration. Both are marked **DRAFT** at the
-> top of the page. **Landan must review and approve them before the app is
-> submitted to Intuit for production.**
+> **Template legal text:** `eula.html` and `privacy.html` are generic,
+> operator-neutral boilerplate for an internal, single-tenant business
+> integration. **Any operator forking this repo must review and approve them
+> before submitting their app to Intuit for production** — the pages themselves
+> carry no draft/template banner, so this review is on you.
 
 ## One-time setup
 

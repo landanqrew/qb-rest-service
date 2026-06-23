@@ -66,8 +66,8 @@ def test_pages_exist_and_are_nonempty(page):
 def test_landing_page_names_app_and_purpose():
     """Intuit reviewers must see a real page, not a placeholder."""
     html = (WEB / "index.html").read_text(encoding="utf-8").lower()
-    # Names the app and the integration it describes.
-    assert "lab intake" in html
+    # Names the integration it describes.
+    assert "integration" in html
     assert "quickbooks" in html
     # Links to both required legal pages.
     assert "/eula" in html
@@ -78,10 +78,14 @@ def test_landing_page_names_app_and_purpose():
 
 
 @pytest.mark.parametrize("page", ["eula.html", "privacy.html"])
-def test_legal_pages_marked_draft_for_review(page):
-    """EULA + privacy drafts must be clearly marked for human review."""
-    html = (WEB / page).read_text(encoding="utf-8").upper()
-    assert "DRAFT" in html
+def test_legal_pages_are_operator_neutral(page):
+    """Public-repo pages must carry no organization- or person-specific text."""
+    html = (WEB / page).read_text(encoding="utf-8").lower()
+    for term in ("martin water", "mwl", "lab intake", "landan"):
+        assert term not in html, f"{page} still references '{term}'"
+    # Still a real, substantive legal page — not a placeholder.
+    assert "quickbooks" in html
+    assert "operator" in html
 
 
 def test_privacy_page_describes_data_handling():

@@ -1,9 +1,9 @@
 # qb-service — Project Context
 
 ## Project Overview
-FastAPI service that fronts the QuickBooks Online REST API for the Martin Water Labs Lab Intake web app. Owns Intuit OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. Holds **no business data** — every request hits QBO live. Forked from `quickbooks-cli` (sibling repo).
+FastAPI service that fronts the QuickBooks Online REST API for a Lab Intake web app. Owns Intuit OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. Holds **no business data** — every request hits QBO live. Forked from `quickbooks-cli` (sibling repo).
 
-Single QBO realm (Martin Water Labs). Deployed to Cloud Run with IAM-based auth for callers.
+Single QBO realm. Deployed to Cloud Run with IAM-based auth for callers.
 
 ## Full design rationale
 See [`docs/qb-service-scope.md`](docs/qb-service-scope.md) — that doc is the source of truth for the architecture, HTTP surface, auth model, and phased delivery plan.
@@ -42,12 +42,6 @@ Src layout: `src/qbsvc/`. Build backend: setuptools.
 - Scope: `com.intuit.quickbooks.accounting` (read/write)
 - **Refresh tokens rotate on every refresh** — the new value must be persisted, or the next cold start dies
 
-## Implementation Status
-- Phase 0: Bootstrap scaffold ✅
-- Phase 1: Token plumbing + `/admin/oauth/*` (pending)
-- Phase 2: Read endpoints (pending)
-- Phase 3: Write endpoints (pending)
-- Phase 4: Hardening + Cloud Run deploy (pending)
 
 ## Related projects
 - `quickbooks-cli` at `../quickbooks-cli` — the laptop CLI this service was forked from. Different use case; keeps its own independent OAuth setup and adds payments/estimates/vendors/bills/P&L commands the service does not.
