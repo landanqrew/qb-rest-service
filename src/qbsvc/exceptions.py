@@ -34,10 +34,19 @@ class TokenExpiredError(AuthError):
 class APIError(QBError):
     """Error returned by the QuickBooks Online API."""
 
-    def __init__(self, status_code: int, detail: str, raw: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        raw: dict | None = None,
+        intuit_tid: str | None = None,
+    ):
         self.status_code = status_code
         self.detail = detail
         self.raw = raw
+        # Intuit's transaction id (`intuit_tid` header) from the failing
+        # response, carried so the exception handler can echo it to callers.
+        self.intuit_tid = intuit_tid
         super().__init__(f"HTTP {status_code}: {detail}")
 
 

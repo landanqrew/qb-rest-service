@@ -68,6 +68,27 @@ def test_start_redirects_to_intuit(client):
     assert location.startswith("https://appcenter.intuit.com/connect/oauth2")
 
 
+def test_start_uses_discovered_authorize_endpoint(client, monkeypatch):
+    # When discovery resolves, /start must send the operator to the endpoint
+    # the discovery document advertises — not a value pinned in code.
+    from qbsvc.auth import discovery
+
+    discovery.reset_cache()
+    monkeypatch.setattr(
+        discovery,
+        "_fetch_json",
+        lambda url: {
+            "authorization_endpoint": "https://discovered.example.com/connect",
+            "token_endpoint": "https://discovered.example.com/tokens",
+            "revocation_endpoint": "https://discovered.example.com/revoke",
+        },
+    )
+    resp = client.get("/admin/oauth/start")
+    assert resp.headers["location"].startswith(
+        "https://discovered.example.com/connect"
+    )
+
+
 def test_start_includes_required_query_params(client):
     resp = client.get("/admin/oauth/start")
     parsed = urlparse(resp.headers["location"])
