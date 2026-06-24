@@ -156,7 +156,9 @@ class QBClient:
                 self._log_call(
                     method, endpoint, resp.status_code, start, tokens.realm_id, retries, tid
                 )
-                raise RateLimitError("Rate limited after retry. Try again later.")
+                raise RateLimitError(
+                    "Rate limited after retry. Try again later.", intuit_tid=tid
+                )
 
         if resp.status_code == 401:
             try:

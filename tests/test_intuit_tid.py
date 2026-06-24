@@ -161,3 +161,21 @@ def test_error_envelope_includes_intuit_tid(settings_env, fresh_store):
 
     assert resp.status_code == 502
     assert resp.json()["error"]["intuit_tid"] == _TID
+
+
+def test_rate_limited_envelope_includes_intuit_tid(settings_env, fresh_store):
+    # Both attempts 429 → post-retry RateLimitError → RATE_LIMITED envelope.
+    # The async handler can't read the contextvar the sync worker bound, so the
+    # tid has to ride on the exception (mirrors the APIError path).
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json={"Fault": {"Error": [{"Message": "slow down"}]}},
+            headers={"intuit_tid": _TID, "Retry-After": "0"},
+        )
+
+    client = _route_client(fresh_store, handler)
+    resp = client.get("/v1/customers/123")
+
+    assert resp.status_code == 429
+    assert resp.json()["error"]["intuit_tid"] == _TID
