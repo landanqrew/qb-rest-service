@@ -9,19 +9,24 @@ from urllib.parse import urlencode, parse_qs, urlparse
 
 import httpx
 
+from qbsvc.auth.discovery import get_discovery
 from qbsvc.auth.tokens import TokenData, TokenStore
 from qbsvc.config import Settings
 from qbsvc.exceptions import AuthError, TokenRefreshError
 
-AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2"
-TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 REDIRECT_PORT = 8418
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 SCOPES = "com.intuit.quickbooks.accounting"
 
 
-def build_authorize_url(client_id: str, state: str, redirect_uri: str) -> str:
-    """Build the Intuit consent-screen URL the operator's browser is sent to."""
+def build_authorize_url(
+    client_id: str, state: str, redirect_uri: str, authorize_endpoint: str
+) -> str:
+    """Build the Intuit consent-screen URL the operator's browser is sent to.
+
+    `authorize_endpoint` comes from the discovery document (see
+    qbsvc.auth.discovery) so the flow tracks Intuit's published endpoint.
+    """
     params = {
         "client_id": client_id,
         "response_type": "code",
@@ -29,7 +34,7 @@ def build_authorize_url(client_id: str, state: str, redirect_uri: str) -> str:
         "redirect_uri": redirect_uri,
         "state": state,
     }
-    return f"{AUTHORIZE_URL}?{urlencode(params)}"
+    return f"{authorize_endpoint}?{urlencode(params)}"
 
 
 def exchange_code(
@@ -43,7 +48,7 @@ def exchange_code(
     _require_creds(settings)
 
     resp = httpx.post(
-        TOKEN_URL,
+        get_discovery(settings).token_endpoint,
         auth=(settings.intuit_client_id, settings.intuit_client_secret),
         data={
             "grant_type": "authorization_code",
@@ -120,6 +125,7 @@ def login(settings: Settings, store: TokenStore) -> TokenData:
         client_id=settings.intuit_client_id,
         state=state,
         redirect_uri=REDIRECT_URI,
+        authorize_endpoint=get_discovery(settings).authorization_endpoint,
     )
 
     server = HTTPServer(("localhost", REDIRECT_PORT), CallbackHandler)
@@ -154,7 +160,7 @@ def refresh(
     _require_creds(settings)
 
     resp = httpx.post(
-        TOKEN_URL,
+        get_discovery(settings).token_endpoint,
         auth=(settings.intuit_client_id, settings.intuit_client_secret),
         data={
             "grant_type": "refresh_token",

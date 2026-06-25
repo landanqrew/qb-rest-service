@@ -34,10 +34,19 @@ class TokenExpiredError(AuthError):
 class APIError(QBError):
     """Error returned by the QuickBooks Online API."""
 
-    def __init__(self, status_code: int, detail: str, raw: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        raw: dict | None = None,
+        intuit_tid: str | None = None,
+    ) -> None:
         self.status_code = status_code
         self.detail = detail
         self.raw = raw
+        # Intuit's transaction id (`intuit_tid` header) from the failing
+        # response, carried so the exception handler can echo it to callers.
+        self.intuit_tid = intuit_tid
         super().__init__(f"HTTP {status_code}: {detail}")
 
 
@@ -49,11 +58,24 @@ class RateLimitError(QBError):
     HTTP layer can surface a Retry-After header to the caller. It stays
     None for the post-retry QBO 429 path, which has no useful retry hint
     to forward.
+
+    `intuit_tid` carries Intuit's transaction id from a post-retry QBO 429,
+    so the error envelope can echo it like the APIError path does. The async
+    exception handler can't read the contextvar the sync client bound, so the
+    value has to ride on the exception explicitly. None for the local-bucket
+    path, which never reached Intuit.
     """
 
-    def __init__(self, message: str = "Rate limited", *, retry_after: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str = "Rate limited",
+        *,
+        retry_after: int | None = None,
+        intuit_tid: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+        self.intuit_tid = intuit_tid
 
 
 class PaginationError(QBError):

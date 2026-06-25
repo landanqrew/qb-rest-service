@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from qbsvc.auth import oauth as oauth_mod
+from qbsvc.auth.discovery import get_discovery
 from qbsvc.auth.oauth_state import OAuthStateStore
 from qbsvc.auth.tokens import TokenStore
 from qbsvc.config import Settings, get_settings
@@ -38,6 +39,7 @@ def start(
         client_id=settings.intuit_client_id,
         state=state,
         redirect_uri=settings.oauth_redirect_uri,
+        authorize_endpoint=get_discovery(settings).authorization_endpoint,
     )
     return RedirectResponse(url, status_code=302)
 

@@ -13,7 +13,7 @@ from qbsvc.exceptions import (
     RateLimitError,
     TokenStoreError,
 )
-from qbsvc.request_context import get_request_id
+from qbsvc.request_context import get_intuit_tid, get_request_id
 from qbsvc.schemas import ErrorPayload, ErrorResponse
 
 _log = logging.getLogger("qbsvc.errors")
@@ -25,14 +25,22 @@ def envelope(
     status: int,
     *,
     qbo_detail: str | None = None,
+    intuit_tid: str | None = None,
 ) -> JSONResponse:
-    """Build the standard error envelope, attaching the active request id."""
+    """Build the standard error envelope, attaching the active request id.
+
+    `intuit_tid` defaults to the value the QBO client bound to the request
+    context, so inline route error responses pick it up automatically. The
+    central APIError handler passes it explicitly because it runs in the async
+    context, outside the sync worker where the client bound it.
+    """
     payload = ErrorResponse(
         error=ErrorPayload(
             code=code,
             message=message,
             request_id=get_request_id(),
             qbo_detail=qbo_detail,
+            intuit_tid=intuit_tid or get_intuit_tid(),
         )
     )
     return JSONResponse(
@@ -74,7 +82,9 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RateLimitError)
     async def _rate(_request: Request, exc: RateLimitError) -> JSONResponse:
-        response = envelope("RATE_LIMITED", str(exc), status=429)
+        response = envelope(
+            "RATE_LIMITED", str(exc), status=429, intuit_tid=exc.intuit_tid
+        )
         if exc.retry_after is not None:
             response.headers["Retry-After"] = str(exc.retry_after)
         return response
@@ -87,12 +97,14 @@ def register_exception_handlers(app: FastAPI) -> None:
                 exc.detail or "Not found",
                 status=404,
                 qbo_detail=exc.detail,
+                intuit_tid=exc.intuit_tid,
             )
         return envelope(
             "QBO_ERROR",
             str(exc),
             status=502,
             qbo_detail=exc.detail,
+            intuit_tid=exc.intuit_tid,
         )
 
     @app.exception_handler(RequestValidationError)

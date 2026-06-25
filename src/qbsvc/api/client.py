@@ -11,6 +11,7 @@ from qbsvc.auth.oauth import refresh as oauth_refresh
 from qbsvc.auth.tokens import TokenData, TokenStore
 from qbsvc.config import Settings, get_settings
 from qbsvc.exceptions import APIError, AuthError, NotAuthenticatedError, RateLimitError
+from qbsvc.request_context import set_intuit_tid
 
 BASE_URL = "https://quickbooks.api.intuit.com/v3/company"
 SANDBOX_BASE_URL = "https://sandbox-quickbooks.api.intuit.com/v3/company"
@@ -151,10 +152,13 @@ class QBClient:
             retries += 1
             resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
             if resp.status_code == 429:
+                tid = _capture_intuit_tid(resp)
                 self._log_call(
-                    method, endpoint, resp.status_code, start, tokens.realm_id, retries
+                    method, endpoint, resp.status_code, start, tokens.realm_id, retries, tid
                 )
-                raise RateLimitError("Rate limited after retry. Try again later.")
+                raise RateLimitError(
+                    "Rate limited after retry. Try again later.", intuit_tid=tid
+                )
 
         if resp.status_code == 401:
             try:
@@ -164,15 +168,17 @@ class QBClient:
                 # the refresh exchange itself blows up — otherwise the QBO
                 # call goes missing from observability while the auth log
                 # records the refresh failure separately.
+                tid = _capture_intuit_tid(resp)
                 self._log_call(
-                    method, endpoint, 401, start, tokens.realm_id, retries
+                    method, endpoint, 401, start, tokens.realm_id, retries, tid
                 )
                 raise
             headers["Authorization"] = f"Bearer {tokens.access_token}"
             retries += 1
             resp = self._http.request(method, url, headers=headers, params=params, json=json_body)
 
-        self._log_call(method, endpoint, resp.status_code, start, tokens.realm_id, retries)
+        tid = _capture_intuit_tid(resp)
+        self._log_call(method, endpoint, resp.status_code, start, tokens.realm_id, retries, tid)
 
         if resp.status_code >= 400:
             self._raise_api_error(resp)
@@ -187,18 +193,21 @@ class QBClient:
         start: float,
         realm_id: str,
         retries: int,
+        intuit_tid: str | None = None,
     ) -> None:
-        _log.info(
-            "qbo_call",
-            extra={
-                "method": method,
-                "qbo_endpoint": endpoint,
-                "status": status,
-                "qbo_duration_ms": round((time.perf_counter() - start) * 1000, 2),
-                "realm_id": realm_id,
-                "retries": retries,
-            },
-        )
+        extra = {
+            "method": method,
+            "qbo_endpoint": endpoint,
+            "status": status,
+            "qbo_duration_ms": round((time.perf_counter() - start) * 1000, 2),
+            "realm_id": realm_id,
+            "retries": retries,
+        }
+        # Only emit the key when Intuit returned a tid so log lines from
+        # non-QBO paths (and any future response without the header) stay clean.
+        if intuit_tid:
+            extra["intuit_tid"] = intuit_tid
+        _log.info("qbo_call", extra=extra)
 
     def _ensure_tokens(self) -> TokenData:
         """Load tokens from the store, refreshing if expired."""
@@ -269,7 +278,24 @@ class QBClient:
         else:
             detail = resp.text
 
-        raise APIError(resp.status_code, detail, raw=body)
+        raise APIError(
+            resp.status_code,
+            detail,
+            raw=body,
+            intuit_tid=resp.headers.get("intuit_tid"),
+        )
+
+
+def _capture_intuit_tid(resp: httpx.Response) -> str | None:
+    """Read Intuit's transaction id and bind it to the request context.
+
+    Returned so the caller can also pass it to the structured log line; the
+    context binding is what lets the error envelope echo the tid back without
+    every route handler having to thread it through explicitly.
+    """
+    tid = resp.headers.get("intuit_tid")
+    set_intuit_tid(tid)
+    return tid
 
 
 _FROM_ENTITY_RE = re.compile(r"\bFROM\s+([A-Za-z]\w*)", re.IGNORECASE)
