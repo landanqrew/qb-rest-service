@@ -36,6 +36,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from typing import Callable
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -46,6 +47,32 @@ from qbsvc.request_context import get_request_id
 _log = logging.getLogger("qbsvc.admin_gate")
 
 _ADMIN_PREFIX = "/admin/"
+
+
+def ensure_admin_gate_configured(settings: Settings) -> None:
+    """Fail fast if the admin gate would be silently OFF on a real deployment.
+
+    The gate disables itself when the allowlist is empty — intentional for local
+    dev and the production OAuth bootstrap (`deploy/oauth-setup.md` §3a), which
+    have no Cloud Run IAM edge and no JWT to inspect. But on Cloud Run an empty
+    allowlist means `/admin/*` is reachable by anyone holding
+    `roles/run.invoker`, including the web app's runtime service account, which
+    must never be able to pivot the realm or invalidate the refresh token.
+
+    `deploy/deploy.sh` already requires `ADMIN_ALLOWLIST`, but a deploy that
+    bypasses it (raw `gcloud run deploy`, `gcloud run services replace`) could
+    still ship an empty value. Cloud Run always sets `K_SERVICE`, so treat its
+    presence as "an IAM-aware edge is in front of us" and refuse to start with
+    the gate disabled. Called once at app construction (`main.create_app`).
+    """
+    if os.environ.get("K_SERVICE") and not _normalize_allowlist(settings.admin_allowlist):
+        raise RuntimeError(
+            "QBSVC_ADMIN_ALLOWLIST is empty but the service is running on "
+            "Cloud Run (K_SERVICE is set). Refusing to start with the /admin/* "
+            "gate disabled — that would let any roles/run.invoker caller reach "
+            "the OAuth admin routes. Set QBSVC_ADMIN_ALLOWLIST to the operator "
+            "email(s) allowed to reach /admin/* (see deploy/oauth-setup.md)."
+        )
 
 
 class AdminGateMiddleware:

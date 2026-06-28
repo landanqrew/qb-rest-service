@@ -167,8 +167,17 @@ def test_nginx_template_sets_security_headers():
         "X-Content-Type-Options",
         "X-Frame-Options",
         "Content-Security-Policy",
+        "Strict-Transport-Security",
     ):
         assert header in text
+    # HSTS must stay max-age-only on the shared run.app domain — assert on the
+    # directive line itself, not the file (comments explain the omission).
+    hsts_line = next(
+        line for line in text.splitlines()
+        if "add_header Strict-Transport-Security" in line
+    )
+    assert "includeSubDomains" not in hsts_line
+    assert "preload" not in hsts_line
 
 
 def test_qb_pages_cloud_run_yaml_is_locked_down():
@@ -364,3 +373,4 @@ def test_live_pages_carry_security_headers(nginx_server, path):
     assert headers.get("x-frame-options") == "DENY", f"{path} missing X-Frame-Options"
     assert headers.get("x-content-type-options") == "nosniff", f"{path} missing X-Content-Type-Options"
     assert "default-src 'none'" in headers.get("content-security-policy", ""), f"{path} missing CSP"
+    assert "max-age=" in headers.get("strict-transport-security", ""), f"{path} missing HSTS"

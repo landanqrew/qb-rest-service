@@ -69,8 +69,11 @@ Set on the qb-service deployment (Cloud Run env vars, `.env` locally):
 >
 > 1. **Register a localhost redirect URI** (`http://localhost:8080/admin/oauth/callback`)
 >    in the Intuit console and set it as `QBSVC_OAUTH_REDIRECT_URI` on the
->    service. Development keys allow plain-HTTP localhost URIs; production
->    keys do not (open question for the production bootstrap).
+>    service. Development keys allow plain-HTTP localhost URIs; **production
+>    keys reject localhost and IP redirect URIs entirely** (they must be a
+>    publicly resolvable `https://` host). The production bootstrap therefore
+>    uses a different mechanism — see
+>    [§3a Production bootstrap](#3a-production-bootstrap-production-keys--locked-edge).
 > 2. **Run a local forwarder that injects your identity token** and browse
 >    through `http://localhost:8080`. Note `gcloud run services proxy` does
 >    NOT work here — the token it mints fails the admin gate's email check.
@@ -98,12 +101,117 @@ Set on the qb-service deployment (Cloud Run env vars, `.env` locally):
    - Persists tokens via the configured `TokenStore` (file or Secret Manager).
    - Returns a small success page.
 
+> The steps above describe the **dev / sandbox** flow (Development keys,
+> `http://localhost` redirect URI, identity-injecting forwarder). For
+> **production keys** against the IAM-locked deployed service, use §3a.
+
+## 3a. Production bootstrap (production keys + locked edge)
+
+Production keys reject localhost/IP redirect URIs, so the callback must be a
+public `https://` URL. But the deployed `qb-service` is
+`--no-allow-unauthenticated`: a browser following Intuit's redirect carries no
+Cloud Run identity token, so the IAM edge 403s the callback. Rather than open
+the production edge, run the **one-time** handshake from a throwaway public
+tunnel pointed at a *local* instance, and let it write the token to the **same
+Secret Manager secret** the deployed service reads. The deployed service's
+locked edge is never touched; it picks up the token on its next call.
+
+```
+local uvicorn  --(temporary https tunnel)-->  Intuit consent
+      |
+      writes token version --> Secret Manager (mwl-qb-tokens)
+      |
+deployed qb-service reads it on the next QBO call
+```
+
+This is a one-time operation: once a refresh token lands in Secret Manager it
+self-sustains via rotation (§4). You only repeat it on revoke / scope change /
+180-day inactivity.
+
+### Prerequisites
+
+- **Production** Intuit app keys (client id + secret) from the Intuit console.
+- The `mwl-qb-tokens` secret already **exists** in the target project (it can
+  be empty). See [`iam-setup.md`](iam-setup.md).
+- Your Google identity holds **`roles/secretmanager.secretVersionAdder`** (and
+  `secretAccessor`) on `mwl-qb-tokens`, then:
+  ```bash
+  gcloud auth application-default login
+  ```
+- A temporary public HTTPS tunnel tool (e.g. `ngrok`), authenticated.
+- **Move `.env` aside** for the duration so its sandbox credentials cannot
+  bleed into the prod run (`mv .env .env.sandbox` — restore after). Shell env
+  vars do override `.env`, but removing the ambiguity is safer.
+
+### Procedure
+
+1. **Open the tunnel** to the local port you'll run on:
+   ```bash
+   ngrok http 8080      # note the https URL, e.g. https://ab12cd34.ngrok-free.app
+   ```
+   If your tunnel plan supports IP restriction, allow only your own public IP.
+   The entire flow — `/start` and the callback — originates from *your*
+   browser, so an IP allowlist won't break it. Do **not** put basic-auth on the
+   tunnel: Intuit's browser redirect to `/callback` can't supply credentials.
+
+2. **Register the tunnel callback** as a **Production** redirect URI in the
+   Intuit console (Keys & OAuth → Redirect URIs):
+   ```
+   https://<tunnel-subdomain>.ngrok-free.app/admin/oauth/callback
+   ```
+   Save and wait ~1–2 minutes for Intuit to propagate it.
+
+3. **Start a local instance** wired to production keys and the shared secret.
+   The redirect URI must match step 2 byte-for-byte:
+   ```bash
+   QBSVC_INTUIT_CLIENT_ID='<prod-client-id>' \
+   QBSVC_INTUIT_CLIENT_SECRET='<prod-client-secret>' \
+   QBSVC_INTUIT_ENVIRONMENT=production \
+   QBSVC_TOKEN_BACKEND=secret_manager \
+   QBSVC_GCP_PROJECT='<target-project>' \
+   QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens \
+   QBSVC_ADMIN_ALLOWLIST= \
+   QBSVC_OAUTH_REDIRECT_URI='https://<tunnel-subdomain>.ngrok-free.app/admin/oauth/callback' \
+   uv run uvicorn qbsvc.main:app --port 8080
+   ```
+   `QBSVC_ADMIN_ALLOWLIST=` (empty) keeps the admin gate **off** — required,
+   because Intuit's browser callback carries no JWT for the gate to check. The
+   gate being off is why the tunnel must stay short-lived / IP-restricted.
+
+4. In your browser, go to the **tunnel** start URL (not localhost):
+   ```
+   https://<tunnel-subdomain>.ngrok-free.app/admin/oauth/start
+   ```
+
+5. Approve consent as the QuickBooks admin **for the production realm**. Intuit
+   redirects your browser → tunnel → local `/admin/oauth/callback`, which
+   exchanges the code and writes a **new version** of `mwl-qb-tokens`.
+
+6. **Tear down immediately:** stop uvicorn, stop the tunnel, and **delete the
+   tunnel redirect URI** from the Intuit console (it's now dead). Restore your
+   env file: `mv .env.sandbox .env`.
+
+7. **Verify** against the deployed, still-locked service with an authenticated
+   call (identity that has `roles/run.invoker`):
+   ```bash
+   curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+     https://<qb-service-domain>/v1/customers
+   ```
+   A 200 with customer data confirms the deployed service is reading the new
+   token from Secret Manager.
+
+> **Why this is safe:** the production edge stays `--no-allow-unauthenticated`
+> throughout. The only exposed surface is a random, short-lived tunnel URL to a
+> local process, and the token it produces is shared via Secret Manager — so it
+> makes no difference that the handshake didn't run on the deployed service.
+
 ## 4. Re-auth
 
 Any time the refresh token is invalidated (scope change, manual revoke,
-180-day inactivity expiry, switching Intuit apps), repeat step 3. The
-new refresh token overwrites the stored one — for the Secret Manager
-backend, that means a new secret version is added.
+180-day inactivity expiry, switching Intuit apps), repeat the authorization
+flow — §3 for dev/sandbox, **§3a for production**. The new refresh token
+overwrites the stored one — for the Secret Manager backend, that means a new
+secret version is added.
 
 ## Admin gate (issue #13)
 
@@ -144,6 +252,17 @@ If the env var is unset or empty the gate is **OFF**. That's the right
 default for local dev (no Cloud Run, no JWT to inspect) but means
 **production deployments must set it**. `deploy/cloud-run.yaml` includes a
 placeholder you fill in before applying.
+
+This is enforced two ways so a misconfigured deploy can't silently disable the
+gate:
+
+- `deploy/deploy.sh` hard-requires `ADMIN_ALLOWLIST` (it errors before building).
+- The app itself **refuses to start on Cloud Run** with an empty allowlist:
+  `ensure_admin_gate_configured()` (called from `create_app`) raises when
+  `K_SERVICE` is set (i.e. running on Cloud Run) but the allowlist is empty, so
+  a deploy via raw `gcloud run deploy` / `services replace` fails its startup
+  probe instead of coming up wide open. Local dev and the §3a bootstrap have no
+  `K_SERVICE`, so they're unaffected and the gate stays off there as intended.
 
 ### Decision (rejected option)
 

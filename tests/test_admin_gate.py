@@ -14,11 +14,16 @@ import base64
 import json
 from typing import Iterable
 
+import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from qbsvc.auth.admin_gate import AdminGateMiddleware, extract_email_from_bearer
+from qbsvc.auth.admin_gate import (
+    AdminGateMiddleware,
+    ensure_admin_gate_configured,
+    extract_email_from_bearer,
+)
 from qbsvc.config import Settings, get_settings
 from qbsvc.middleware import RequestIDMiddleware
 
@@ -346,3 +351,27 @@ def test_real_admin_oauth_start_allowed_for_admin(monkeypatch):
     assert resp.status_code in (302, 307)
 
     get_settings.cache_clear()
+
+
+# ---------- startup guard: gate cannot be silently OFF on Cloud Run ----------
+
+
+def test_startup_guard_raises_on_cloud_run_without_allowlist(monkeypatch):
+    """Cloud Run sets K_SERVICE; an empty allowlist there means /admin/* is open
+    to any roles/run.invoker caller. The app must refuse to start."""
+    monkeypatch.setenv("K_SERVICE", "qb-service")
+    with pytest.raises(RuntimeError, match="QBSVC_ADMIN_ALLOWLIST is empty"):
+        ensure_admin_gate_configured(Settings(admin_allowlist=[]))
+
+
+def test_startup_guard_passes_on_cloud_run_with_allowlist(monkeypatch):
+    monkeypatch.setenv("K_SERVICE", "qb-service")
+    # Does not raise.
+    ensure_admin_gate_configured(Settings(admin_allowlist=[ADMIN_EMAIL]))
+
+
+def test_startup_guard_noop_off_cloud_run(monkeypatch):
+    """Local dev and the §3a OAuth bootstrap run without K_SERVICE and
+    intentionally with an empty allowlist — the guard must stay silent."""
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    ensure_admin_gate_configured(Settings(admin_allowlist=[]))
