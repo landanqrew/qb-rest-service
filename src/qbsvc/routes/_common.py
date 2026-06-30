@@ -59,6 +59,19 @@ def is_not_found(exc: APIError) -> bool:
     return False
 
 
+def is_pseudonym_miss(entity_body: dict) -> bool:
+    """True if a 200-OK entity read is actually a QBO "not found" stub.
+
+    Name-list entities (Customer, Vendor, …) don't raise the 400 Object-Not-
+    Found fault that Invoice/Item do. Instead a read of a non-existent id comes
+    back HTTP 200 with a sparse "pseudonym" stub that carries a `V4IDPseudonym`
+    field (echoing the requested id) and lacks the `Id`/`SyncToken` every real
+    entity has. A present entity always has an `Id`, so its absence is the
+    reliable signal that this body is a miss masquerading as a hit.
+    """
+    return entity_body.get("Id") is None
+
+
 def list_entity(
     client: QBClient,
     *,
@@ -170,6 +183,12 @@ def get_entity_detail(
 
     entity_body = resp.get(entity)
     if entity_body is None:
+        return error_response("NOT_FOUND", f"{label} {entity_id} not found", 404)
+
+    # Customer/Vendor reads of a missing id return 200 with a pseudonym stub
+    # rather than a fault; treat that as 404 so the contract matches Item and
+    # Invoice (which fault out and are caught by is_not_found above).
+    if is_pseudonym_miss(entity_body):
         return error_response("NOT_FOUND", f"{label} {entity_id} not found", 404)
 
     body = DetailResponse(data=entity_body)

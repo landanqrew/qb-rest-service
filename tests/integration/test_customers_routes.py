@@ -377,6 +377,38 @@ def test_detail_unknown_id_returns_404_with_envelope(settings_env, token_store):
     assert "9999" in body["error"]["message"]
 
 
+def test_detail_pseudonym_stub_returns_404(settings_env, token_store):
+    """Regression (#45): a missing Customer comes back HTTP 200 with a sparse
+    "pseudonym" stub — not the 400 fault Item/Invoice raise. The route must
+    still surface 404, not pass the junk stub through as a 200.
+
+    Body shape mirrors the real QBO sandbox response for a non-existent id.
+    """
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "Customer": {
+                    "BillAddr": {"Id": "1"},
+                    "ShipAddr": {"Id": "2"},
+                    "Job": False,
+                    "IsProject": False,
+                    "domain": "QBO",
+                    "sparse": False,
+                    "Active": False,
+                    "V4IDPseudonym": "99999999",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.get("/v1/customers/99999999")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "99999999" in body["error"]["message"]
+
+
 def test_detail_propagates_qbo_5xx_as_502(settings_env, token_store):
     def handler(request):
         return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})
