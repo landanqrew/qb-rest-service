@@ -3,93 +3,195 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MWL Lab Intake &mdash; QuickBooks Online Integration</title>
-  <meta name="description" content="Martin Water Labs Lab Intake integration with QuickBooks Online.">
+  <title>QuickBooks Online Integration</title>
+  <meta name="description" content="A private integration with QuickBooks Online.">
   <style>
-    :root { color-scheme: light; }
+    :root {
+      --qb-green: #2ca01c;
+      --qb-green-dark: #108000;
+      --qb-green-tint: #ecf8e9;
+      --blue: #0077c5;
+      --ink: #393a3d;
+      --muted: #6b6c72;
+      --hairline: #e3e5e8;
+      --canvas: #f4f5f8;
+      --card: #ffffff;
+      --radius: 8px;
+      --font: "Avenir Next", "Avenir", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
     * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: var(--font);
       line-height: 1.6;
-      color: #1a2330;
-      background: #f5f7fa;
+      color: var(--ink);
+      background: var(--canvas);
+      -webkit-font-smoothing: antialiased;
     }
-    header {
-      background: #0b3d62;
-      color: #fff;
-      padding: 3rem 1.5rem 2.5rem;
+
+    /* Top chrome — echoes the white QuickBooks Online product bar. */
+    .topbar {
+      background: var(--card);
+      border-bottom: 1px solid var(--hairline);
+      height: 56px;
+      display: flex;
+      align-items: center;
     }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 0 1.5rem; }
-    header .wrap { padding: 0 1.5rem; }
-    h1 { margin: 0 0 .35rem; font-size: 1.8rem; }
-    .tagline { margin: 0; opacity: .85; font-size: 1.05rem; }
-    main { padding: 2.5rem 0 3rem; }
-    h2 { font-size: 1.2rem; margin: 2rem 0 .5rem; }
-    p { margin: .6rem 0; }
-    ul { margin: .6rem 0; padding-left: 1.25rem; }
-    a { color: #0b6ea8; }
+    .topbar .wrap { display: flex; align-items: center; gap: .7rem; }
+    .mark {
+      width: 30px; height: 30px;
+      border-radius: 7px;
+      background: var(--qb-green);
+      display: inline-flex; align-items: center; justify-content: center;
+      flex: none;
+    }
+    .brand { font-weight: 700; font-size: 1rem; letter-spacing: -.01em; }
+    .brand .sub { color: var(--muted); font-weight: 600; }
+
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 1.5rem; width: 100%; }
+
+    /* Hero */
+    .hero { padding: 3.25rem 0 1.75rem; }
+    .status {
+      display: inline-flex; align-items: center; gap: .5rem;
+      background: var(--qb-green-tint);
+      color: var(--qb-green-dark);
+      font-size: .82rem; font-weight: 700;
+      padding: .35rem .75rem .35rem .6rem;
+      border-radius: 999px;
+      margin-bottom: 1.1rem;
+    }
+    .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--qb-green); }
+    h1 { font-size: 2.15rem; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 .6rem; }
+    .lede { font-size: 1.12rem; color: var(--muted); margin: 0; max-width: 56ch; }
+
+    /* Cards */
     .card {
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 1.5rem 1.75rem;
+      background: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 1.6rem 1.75rem;
+      box-shadow: 0 1px 2px rgba(20,30,40,.04), 0 6px 18px rgba(20,30,40,.04);
     }
+    main { padding-bottom: 3.5rem; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; margin-top: 1.25rem; }
+    @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 1.8rem; } }
+
+    .card h2 {
+      font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+      color: var(--muted); margin: 0 0 .55rem; font-weight: 700;
+    }
+    .card p { margin: 0; color: var(--ink); }
+    .card.lead p { font-size: 1.02rem; }
+
+    /* Capability list */
+    .caps { list-style: none; margin: .35rem 0 0; padding: 0; }
+    .caps li { display: flex; gap: .65rem; align-items: flex-start; padding: .4rem 0; }
+    .caps li:not(:last-child) { border-bottom: 1px solid var(--hairline); }
+    .caps svg { flex: none; margin-top: .28rem; }
+    .caps span { color: var(--ink); }
+
+    .note {
+      margin: 1.1rem 0 0; color: var(--muted); font-size: .95rem;
+    }
+
+    /* Footer */
     footer {
-      border-top: 1px solid #e2e8f0;
-      margin-top: 2.5rem;
-      padding-top: 1.25rem;
-      font-size: .9rem;
-      color: #56657a;
+      margin-top: 2.25rem; padding-top: 1.3rem;
+      border-top: 1px solid var(--hairline);
+      display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem;
+      font-size: .92rem;
     }
-    footer a { margin-right: 1.25rem; }
+    footer a { color: var(--blue); text-decoration: none; font-weight: 600; }
+    footer a:hover { text-decoration: underline; }
+    footer .tm { color: var(--muted); margin-left: auto; }
   </style>
 </head>
 <body>
-  <header>
+  <div class="topbar">
     <div class="wrap">
-      <h1>MWL Lab Intake &mdash; QuickBooks Online Integration</h1>
-      <p class="tagline">A private integration operated by Martin Water Labs.</p>
+      <span class="mark" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9.5 14.5 7.8 16.2a3.2 3.2 0 0 1-4.5-4.5l2.4-2.4a3.2 3.2 0 0 1 4.5 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14.5 9.5l1.7-1.7a3.2 3.2 0 0 1 4.5 4.5l-2.4 2.4a3.2 3.2 0 0 1-4.5 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="brand">QuickBooks Online <span class="sub">Integration</span></span>
+    </div>
+  </div>
+
+  <header class="hero">
+    <div class="wrap">
+      <span class="status"><span class="dot"></span> Connected to QuickBooks Online</span>
+      <h1>QuickBooks Online Integration</h1>
+      <p class="lede">
+        A private, single-tenant integration that syncs an operator's own
+        business application with its QuickBooks Online company.
+      </p>
     </div>
   </header>
 
   <main>
     <div class="wrap">
-      <div class="card">
+      <div class="card lead">
         <h2>What this is</h2>
         <p>
-          This site supports the integration between the
-          <strong>Martin Water Labs (MWL) Lab Intake</strong> web application and
-          <strong>QuickBooks Online</strong>. The integration lets MWL's internal
-          Lab Intake tool read customers, items, and invoices from, and write
-          invoices to, the Martin Water Labs QuickBooks Online company so that
-          lab orders flow into accounting without manual re-entry.
+          This site supports a private integration between an internal business
+          application and <strong>QuickBooks Online</strong>. The integration
+          lets the operator's own tools read and write accounting records in the
+          operator's QuickBooks Online company, so day-to-day operations flow
+          into accounting without manual re-entry.
         </p>
+      </div>
 
-        <h2>Who it's for</h2>
-        <p>
-          This is a single-tenant, internal business integration for Martin Water
-          Labs only. It is not a public product and is not offered to other
-          companies. There is no end-user sign-up here.
-        </p>
+      <div class="grid">
+        <div class="card">
+          <h2>Who it's for</h2>
+          <p>
+            A single-tenant, internal business integration operated by the
+            company that deployed it for its own use. It is not a public product,
+            it is not offered to other companies, and there is no end-user
+            sign-up here.
+          </p>
+        </div>
+        <div class="card">
+          <h2>Data handling</h2>
+          <p>
+            The integration stores no QuickBooks business data of its own — every
+            request is made live against QuickBooks Online. Only the OAuth token
+            needed to maintain the connection is kept, in a managed secret store.
+          </p>
+        </div>
+      </div>
 
+      <div class="card" style="margin-top:1rem;">
         <h2>How it uses QuickBooks</h2>
-        <ul>
-          <li>Reads customers, products/services (items), and invoices.</li>
-          <li>Creates and updates invoices and their line items.</li>
-          <li>Deactivates items when the lab retires a test code.</li>
+        <ul class="caps">
+          <li>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="#ecf8e9"/><path d="M6 10.3 8.7 13 14 7.4" stroke="#2ca01c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Reads accounting records such as customers, products/services (items), and invoices.</span>
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="#ecf8e9"/><path d="M6 10.3 8.7 13 14 7.4" stroke="#2ca01c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Creates and updates invoices and their line items.</span>
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="#ecf8e9"/><path d="M6 10.3 8.7 13 14 7.4" stroke="#2ca01c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Updates or deactivates records as the operator's business requires.</span>
+          </li>
         </ul>
-        <p>
-          Access is authorized by a Martin Water Labs administrator through
-          Intuit's standard OAuth consent flow. The integration stores no
-          QuickBooks business data of its own &mdash; every request is made live
-          against QuickBooks Online.
+        <p class="note">
+          Access is authorized by an administrator of the operating company
+          through Intuit's standard OAuth consent flow.
         </p>
+      </div>
 
+      <div class="wrap" style="padding:0;">
         <footer>
           <a href="/eula">End User License Agreement</a>
           <a href="/privacy">Privacy Policy</a>
-          <span>&copy; Martin Water Labs</span>
+          <span class="tm">QuickBooks and Intuit are trademarks of Intuit Inc.</span>
         </footer>
       </div>
     </div>

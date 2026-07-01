@@ -208,3 +208,6 @@ __marimo__/
 
 .claude/worktrees/
 .claude/settings.local.json
+
+# Intuit app-assessment questionnaire notes (local reference only)
+docs/compliance.md

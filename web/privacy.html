@@ -3,124 +3,195 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Privacy Policy &mdash; MWL Lab Intake QuickBooks Integration</title>
+  <title>Privacy Policy &mdash; QuickBooks Online Integration</title>
   <style>
-    :root { color-scheme: light; }
+    :root {
+      --qb-green: #2ca01c;
+      --qb-green-tint: #ecf8e9;
+      --blue: #0077c5;
+      --ink: #393a3d;
+      --muted: #6b6c72;
+      --hairline: #e3e5e8;
+      --canvas: #f4f5f8;
+      --card: #ffffff;
+      --radius: 8px;
+      --font: "Avenir Next", "Avenir", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
     * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      color: #1a2330;
-      background: #f5f7fa;
+      font-family: var(--font);
+      line-height: 1.65;
+      color: var(--ink);
+      background: var(--canvas);
+      -webkit-font-smoothing: antialiased;
     }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 2.5rem 1.5rem 3rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 1rem; }
-    h2 { font-size: 1.1rem; margin: 1.75rem 0 .4rem; }
-    p, li { margin: .5rem 0; }
-    ul { padding-left: 1.25rem; }
-    a { color: #0b6ea8; }
-    .draft {
-      background: #fff4e5;
-      border: 1px solid #f0c674;
-      border-radius: 8px;
-      padding: .85rem 1.1rem;
-      margin: 0 0 1.5rem;
-      font-size: .95rem;
+
+    .topbar {
+      background: var(--card);
+      border-bottom: 1px solid var(--hairline);
+      height: 56px; display: flex; align-items: center;
     }
-    .back { display: inline-block; margin-top: 2rem; font-size: .95rem; }
-    .meta { color: #56657a; font-size: .9rem; }
+    .topbar .row { display: flex; align-items: center; gap: .7rem; }
+    .mark {
+      width: 30px; height: 30px; border-radius: 7px; background: var(--qb-green);
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+    }
+    .brand { font-weight: 700; font-size: 1rem; letter-spacing: -.01em; }
+    .brand .sub { color: var(--muted); font-weight: 600; }
+
+    .wrap { max-width: 720px; margin: 0 auto; padding: 0 1.5rem; width: 100%; }
+
+    main { padding: 2.5rem 0 3.5rem; }
+
+    .doc {
+      background: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 2.25rem 2.25rem 2.5rem;
+      box-shadow: 0 1px 2px rgba(20,30,40,.04), 0 6px 18px rgba(20,30,40,.04);
+    }
+    @media (max-width: 560px) { .doc { padding: 1.5rem 1.35rem 1.75rem; } }
+
+    h1 { font-size: 1.7rem; letter-spacing: -.02em; margin: 0 0 .3rem; }
+    .meta {
+      color: var(--muted); font-size: .82rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      margin: 0 0 1.75rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--hairline);
+    }
+    h2 {
+      font-size: 1.02rem; margin: 1.9rem 0 .35rem; color: var(--ink);
+      letter-spacing: -.01em;
+    }
+    h2 .num { color: var(--qb-green); font-weight: 800; margin-right: .4rem; }
+    p { margin: .45rem 0; color: var(--ink); }
+
+    ul.data { list-style: none; margin: .6rem 0; padding: 0; }
+    ul.data li { display: flex; gap: .65rem; align-items: flex-start; padding: .3rem 0; }
+    ul.data svg { flex: none; margin-top: .3rem; }
+
+    .back {
+      display: inline-flex; align-items: center; gap: .4rem;
+      margin-top: 2.25rem; font-size: .95rem; font-weight: 600;
+      color: var(--blue); text-decoration: none;
+    }
+    .back:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <p class="draft">
-      <strong>DRAFT &mdash; for internal review.</strong> This Privacy Policy is
-      boilerplate drafted for a single-tenant internal business integration. It
-      must be reviewed and approved by Landan before the app is submitted to
-      Intuit for production.
-    </p>
-
-    <h1>Privacy Policy</h1>
-    <p class="meta">MWL Lab Intake &mdash; QuickBooks Online Integration</p>
-
-    <h2>1. Overview</h2>
-    <p>
-      This Privacy Policy describes how the Martin Water Labs ("MWL") Lab Intake
-      integration with QuickBooks Online (the "Integration") handles data. The
-      Integration is an internal, single-tenant tool used only by Martin Water
-      Labs to connect its Lab Intake application to its own QuickBooks Online
-      company. It is not a consumer-facing product and does not collect data from
-      members of the public.
-    </p>
-
-    <h2>2. Data we access</h2>
-    <p>
-      When authorized by an MWL administrator, the Integration accesses the
-      following from the Martin Water Labs QuickBooks Online company:
-    </p>
-    <ul>
-      <li>Customer records (names, contact and billing details).</li>
-      <li>Products and services (items) used on invoices.</li>
-      <li>Invoices and their line items.</li>
-    </ul>
-    <p>
-      This data is read from, and written to, QuickBooks Online on behalf of
-      Martin Water Labs in the course of MWL's normal accounting operations.
-    </p>
-
-    <h2>3. How we use it</h2>
-    <p>
-      Data is used solely to synchronize lab orders between MWL's Lab Intake
-      application and QuickBooks Online &mdash; for example, looking up a customer,
-      selecting an item, and creating or updating the corresponding invoice. The
-      Integration performs no analytics, profiling, advertising, or sale of data.
-    </p>
-
-    <h2>4. Data storage and retention</h2>
-    <p>
-      The Integration holds no business data of its own. It does not maintain a
-      database or cache of QuickBooks records; every request is made live against
-      QuickBooks Online. The only credential the Integration stores is the OAuth
-      token needed to call QuickBooks on MWL's behalf, kept in Google Cloud
-      Secret Manager and used only to maintain the authorized connection.
-    </p>
-
-    <h2>5. Data sharing</h2>
-    <p>
-      QuickBooks data is not shared with any third party. It moves only between
-      Martin Water Labs' own systems (the Lab Intake application and the
-      Integration) and Intuit's QuickBooks Online service.
-    </p>
-
-    <h2>6. Security</h2>
-    <p>
-      The Integration runs on Google Cloud Run, communicates with QuickBooks
-      Online over HTTPS, and restricts access to authorized Martin Water Labs
-      systems. OAuth credentials are stored in Google Cloud Secret Manager.
-    </p>
-
-    <h2>7. Intuit / QuickBooks Online</h2>
-    <p>
-      Data within QuickBooks Online is also subject to Intuit's own privacy
-      policy and terms. This policy does not modify or supersede any agreement
-      between Martin Water Labs and Intuit. "QuickBooks" and "Intuit" are
-      trademarks of Intuit Inc.
-    </p>
-
-    <h2>8. Changes</h2>
-    <p>
-      This policy may be updated as the Integration evolves. Material changes
-      will be reflected on this page.
-    </p>
-
-    <h2>9. Contact</h2>
-    <p>
-      Questions about this Privacy Policy should be directed to the Martin Water
-      Labs administrator responsible for the Integration.
-    </p>
-
-    <a class="back" href="/">&larr; Back to home</a>
+  <div class="topbar">
+    <div class="wrap row">
+      <span class="mark" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9.5 14.5 7.8 16.2a3.2 3.2 0 0 1-4.5-4.5l2.4-2.4a3.2 3.2 0 0 1 4.5 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14.5 9.5l1.7-1.7a3.2 3.2 0 0 1 4.5 4.5l-2.4 2.4a3.2 3.2 0 0 1-4.5 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="brand">QuickBooks Online <span class="sub">Integration</span></span>
+    </div>
   </div>
+
+  <main>
+    <div class="wrap">
+      <article class="doc">
+        <h1>Privacy Policy</h1>
+        <p class="meta">QuickBooks Online Integration</p>
+
+        <h2><span class="num">1</span>Overview</h2>
+        <p>
+          This Privacy Policy describes how this integration with QuickBooks
+          Online (the "Integration") handles data. In this policy, "Operator"
+          means the company that has deployed and operates the Integration. The
+          Integration is an internal, single-tenant tool used only by the Operator
+          to connect its own applications to its own QuickBooks Online company. It
+          is not a consumer-facing product and does not collect data from members
+          of the public.
+        </p>
+
+        <h2><span class="num">2</span>Data we access</h2>
+        <p>
+          When authorized by an administrator of the Operator, the Integration
+          accesses the accounting records the Operator authorizes from its
+          QuickBooks Online company, which may include:
+        </p>
+        <ul class="data">
+          <li>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="#ecf8e9"/><path d="M6 10.3 8.7 13 14 7.4" stroke="#2ca01c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Customer records (names, contact and billing details).</span>
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="#ecf8e9"/><path d="M6 10.3 8.7 13 14 7.4" stroke="#2ca01c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Products and services (items) used on invoices.</span>
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="10" cy="10" r="10" fill="#ecf8e9"/><path d="M6 10.3 8.7 13 14 7.4" stroke="#2ca01c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Invoices and their line items.</span>
+          </li>
+        </ul>
+        <p>
+          This data is read from, and written to, QuickBooks Online on behalf of
+          the Operator in the course of its normal business operations.
+        </p>
+
+        <h2><span class="num">3</span>How we use it</h2>
+        <p>
+          Data is used solely to synchronize the Operator's own applications with
+          QuickBooks Online — for example, looking up a customer, selecting an
+          item, and creating or updating the corresponding invoice. The
+          Integration performs no analytics, profiling, advertising, or sale of
+          data.
+        </p>
+
+        <h2><span class="num">4</span>Data storage and retention</h2>
+        <p>
+          The Integration holds no business data of its own. It does not maintain
+          a database or cache of QuickBooks records; every request is made live
+          against QuickBooks Online. The only credential the Integration stores is
+          the OAuth token needed to call QuickBooks on the Operator's behalf, kept
+          in a secret store and used only to maintain the authorized connection.
+        </p>
+
+        <h2><span class="num">5</span>Data sharing</h2>
+        <p>
+          QuickBooks data is not shared with any third party. It moves only
+          between the Operator's own systems and Intuit's QuickBooks Online
+          service.
+        </p>
+
+        <h2><span class="num">6</span>Security</h2>
+        <p>
+          The Integration communicates with QuickBooks Online over HTTPS and
+          restricts access to the Operator's authorized systems. OAuth credentials
+          are kept in a managed secret store.
+        </p>
+
+        <h2><span class="num">7</span>Intuit / QuickBooks Online</h2>
+        <p>
+          Data within QuickBooks Online is also subject to Intuit's own privacy
+          policy and terms. This policy does not modify or supersede any agreement
+          between the Operator and Intuit. "QuickBooks" and "Intuit" are
+          trademarks of Intuit Inc.
+        </p>
+
+        <h2><span class="num">8</span>Changes</h2>
+        <p>
+          This policy may be updated as the Integration evolves. Material changes
+          will be reflected on this page.
+        </p>
+
+        <h2><span class="num">9</span>Contact</h2>
+        <p>
+          Questions about this Privacy Policy should be directed to the
+          administrator responsible for the Integration at the operating company.
+        </p>
+
+        <a class="back" href="/">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" stroke="#0077c5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back to home
+        </a>
+      </article>
+    </div>
+  </main>
 </body>
 </html>

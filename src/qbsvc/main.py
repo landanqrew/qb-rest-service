@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from qbsvc.auth.admin_gate import AdminGateMiddleware
+from qbsvc.auth.admin_gate import AdminGateMiddleware, ensure_admin_gate_configured
+from qbsvc.config import get_settings
 from qbsvc.errors import register_exception_handlers
 from qbsvc.logging import configure_logging
 from qbsvc.middleware import RequestIDMiddleware
@@ -11,6 +12,8 @@ from qbsvc.routes import admin_oauth, customers, health, invoices, items
 
 def create_app() -> FastAPI:
     configure_logging()
+    # Refuse to start on Cloud Run with the /admin/* gate silently disabled.
+    ensure_admin_gate_configured(get_settings())
 
     app = FastAPI(
         title="qb-service",

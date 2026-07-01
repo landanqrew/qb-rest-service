@@ -3,106 +3,163 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>End User License Agreement &mdash; MWL Lab Intake QuickBooks Integration</title>
+  <title>End User License Agreement &mdash; QuickBooks Online Integration</title>
   <style>
-    :root { color-scheme: light; }
+    :root {
+      --qb-green: #2ca01c;
+      --blue: #0077c5;
+      --ink: #393a3d;
+      --muted: #6b6c72;
+      --hairline: #e3e5e8;
+      --canvas: #f4f5f8;
+      --card: #ffffff;
+      --radius: 8px;
+      --font: "Avenir Next", "Avenir", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
     * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      color: #1a2330;
-      background: #f5f7fa;
+      font-family: var(--font);
+      line-height: 1.65;
+      color: var(--ink);
+      background: var(--canvas);
+      -webkit-font-smoothing: antialiased;
     }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 2.5rem 1.5rem 3rem; }
-    h1 { font-size: 1.6rem; margin: 0 0 1rem; }
-    h2 { font-size: 1.1rem; margin: 1.75rem 0 .4rem; }
-    p, li { margin: .5rem 0; }
-    a { color: #0b6ea8; }
-    .draft {
-      background: #fff4e5;
-      border: 1px solid #f0c674;
-      border-radius: 8px;
-      padding: .85rem 1.1rem;
-      margin: 0 0 1.5rem;
-      font-size: .95rem;
+
+    .topbar {
+      background: var(--card);
+      border-bottom: 1px solid var(--hairline);
+      height: 56px; display: flex; align-items: center;
     }
-    .back { display: inline-block; margin-top: 2rem; font-size: .95rem; }
-    .meta { color: #56657a; font-size: .9rem; }
+    .topbar .row { display: flex; align-items: center; gap: .7rem; }
+    .mark {
+      width: 30px; height: 30px; border-radius: 7px; background: var(--qb-green);
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+    }
+    .brand { font-weight: 700; font-size: 1rem; letter-spacing: -.01em; }
+    .brand .sub { color: var(--muted); font-weight: 600; }
+
+    .wrap { max-width: 720px; margin: 0 auto; padding: 0 1.5rem; width: 100%; }
+
+    main { padding: 2.5rem 0 3.5rem; }
+
+    .doc {
+      background: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 2.25rem 2.25rem 2.5rem;
+      box-shadow: 0 1px 2px rgba(20,30,40,.04), 0 6px 18px rgba(20,30,40,.04);
+    }
+    @media (max-width: 560px) { .doc { padding: 1.5rem 1.35rem 1.75rem; } }
+
+    h1 { font-size: 1.7rem; letter-spacing: -.02em; margin: 0 0 .3rem; }
+    .meta {
+      color: var(--muted); font-size: .82rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      margin: 0 0 1.75rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--hairline);
+    }
+    h2 {
+      font-size: 1.02rem; margin: 1.9rem 0 .35rem; color: var(--ink);
+      letter-spacing: -.01em;
+    }
+    h2 .num { color: var(--qb-green); font-weight: 800; margin-right: .4rem; }
+    p { margin: .45rem 0; color: var(--ink); }
+
+    .back {
+      display: inline-flex; align-items: center; gap: .4rem;
+      margin-top: 2.25rem; font-size: .95rem; font-weight: 600;
+      color: var(--blue); text-decoration: none;
+    }
+    .back:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <p class="draft">
-      <strong>DRAFT &mdash; for internal review.</strong> This End User License
-      Agreement is boilerplate drafted for a single-tenant internal business
-      integration. It must be reviewed and approved by Landan before the app is
-      submitted to Intuit for production.
-    </p>
-
-    <h1>End User License Agreement</h1>
-    <p class="meta">MWL Lab Intake &mdash; QuickBooks Online Integration</p>
-
-    <h2>1. Acceptance</h2>
-    <p>
-      This End User License Agreement ("Agreement") governs use of the Martin
-      Water Labs ("MWL") Lab Intake integration with QuickBooks Online (the
-      "Integration"). By authorizing or using the Integration, the authorized
-      MWL administrator agrees to this Agreement.
-    </p>
-
-    <h2>2. License</h2>
-    <p>
-      MWL grants its authorized personnel a limited, non-exclusive,
-      non-transferable, revocable license to use the Integration solely for
-      Martin Water Labs' internal accounting and lab-intake operations. The
-      Integration is provided for MWL's own business use and is not licensed for
-      resale or use by any third party.
-    </p>
-
-    <h2>3. Permitted use</h2>
-    <p>
-      The Integration may be used only to connect MWL's Lab Intake application to
-      the Martin Water Labs QuickBooks Online company for reading and writing
-      customers, items, and invoices. Any other use is prohibited.
-    </p>
-
-    <h2>4. Intuit / QuickBooks Online</h2>
-    <p>
-      Use of QuickBooks Online is additionally governed by Intuit's own terms of
-      service. This Agreement does not modify, replace, or supersede any
-      agreement between MWL and Intuit. "QuickBooks" and "Intuit" are trademarks
-      of Intuit Inc.
-    </p>
-
-    <h2>5. No warranty</h2>
-    <p>
-      The Integration is provided "as is" and "as available," without warranties
-      of any kind, express or implied, including merchantability, fitness for a
-      particular purpose, and non-infringement.
-    </p>
-
-    <h2>6. Limitation of liability</h2>
-    <p>
-      To the maximum extent permitted by law, MWL shall not be liable for any
-      indirect, incidental, special, consequential, or punitive damages arising
-      from use of the Integration.
-    </p>
-
-    <h2>7. Termination</h2>
-    <p>
-      Access may be revoked at any time by disconnecting the Integration's
-      authorization in QuickBooks Online or by an MWL administrator. Sections 5
-      and 6 survive termination.
-    </p>
-
-    <h2>8. Contact</h2>
-    <p>
-      Questions about this Agreement should be directed to the Martin Water Labs
-      administrator responsible for the Integration.
-    </p>
-
-    <a class="back" href="/">&larr; Back to home</a>
+  <div class="topbar">
+    <div class="wrap row">
+      <span class="mark" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9.5 14.5 7.8 16.2a3.2 3.2 0 0 1-4.5-4.5l2.4-2.4a3.2 3.2 0 0 1 4.5 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14.5 9.5l1.7-1.7a3.2 3.2 0 0 1 4.5 4.5l-2.4 2.4a3.2 3.2 0 0 1-4.5 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="brand">QuickBooks Online <span class="sub">Integration</span></span>
+    </div>
   </div>
+
+  <main>
+    <div class="wrap">
+      <article class="doc">
+        <h1>End User License Agreement</h1>
+        <p class="meta">QuickBooks Online Integration</p>
+
+        <h2><span class="num">1</span>Acceptance</h2>
+        <p>
+          This End User License Agreement ("Agreement") governs use of this
+          integration with QuickBooks Online (the "Integration"). By authorizing
+          or using the Integration, the authorized consumer agrees to this
+          Agreement. In this Agreement, "Operator" means the company that has
+          deployed and operates the Integration for its own internal use.
+        </p>
+
+        <h2><span class="num">2</span>License</h2>
+        <p>
+          The Operator grants its authorized personnel a limited, non-exclusive,
+          non-transferable, revocable license to use the Integration solely for
+          the Operator's internal accounting and business operations. The
+          Integration is provided for the Operator's own business use and is not
+          licensed for resale or use by any third party.
+        </p>
+
+        <h2><span class="num">3</span>Permitted use</h2>
+        <p>
+          The Integration may be used only to connect the Operator's own
+          applications to the Operator's QuickBooks Online company for reading and
+          writing accounting records such as customers, items, and invoices. Any
+          other use is prohibited.
+        </p>
+
+        <h2><span class="num">4</span>Intuit / QuickBooks Online</h2>
+        <p>
+          Use of QuickBooks Online is additionally governed by Intuit's own terms
+          of service. This Agreement does not modify, replace, or supersede any
+          agreement between the Operator and Intuit. "QuickBooks" and "Intuit" are
+          trademarks of Intuit Inc.
+        </p>
+
+        <h2><span class="num">5</span>No warranty</h2>
+        <p>
+          The Integration is provided "as is" and "as available," without
+          warranties of any kind, express or implied, including merchantability,
+          fitness for a particular purpose, and non-infringement.
+        </p>
+
+        <h2><span class="num">6</span>Limitation of liability</h2>
+        <p>
+          To the maximum extent permitted by law, the Operator shall not be liable
+          for any indirect, incidental, special, consequential, or punitive
+          damages arising from use of the Integration.
+        </p>
+
+        <h2><span class="num">7</span>Termination</h2>
+        <p>
+          Access may be revoked at any time by disconnecting the Integration's
+          authorization in QuickBooks Online or by an administrator of the
+          Operator. Sections 5 and 6 survive termination.
+        </p>
+
+        <h2><span class="num">8</span>Contact</h2>
+        <p>
+          Questions about this Agreement should be directed to the administrator
+          responsible for the Integration at the operating company.
+        </p>
+
+        <a class="back" href="/">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" stroke="#0077c5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back to home
+        </a>
+      </article>
+    </div>
+  </main>
 </body>
 </html>

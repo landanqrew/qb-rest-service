@@ -31,6 +31,9 @@ class ErrorPayload(BaseModel):
     message: str
     request_id: str | None = None
     qbo_detail: str | None = None
+    # Intuit's transaction id from the failing QBO response (`intuit_tid`
+    # header). Surfaced so callers can quote it to Intuit support.
+    intuit_tid: str | None = None
 
 
 class ErrorResponse(BaseModel):

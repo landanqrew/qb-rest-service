@@ -23,3 +23,21 @@ def set_request_id(value: str | None) -> object:
 
 def reset_request_id(token: object) -> None:
     _request_id_var.reset(token)  # type: ignore[arg-type]
+
+
+# Intuit returns a transaction id (`intuit_tid` header) on every QBO response.
+# The QBO client binds it here so log lines and the error envelope can echo it
+# back — Intuit support uses this value to trace a request on their side.
+#
+# `None` outside of (or before) a QBO call. Bound per QBClient request; in the
+# sync route path the value is set on the threadpool worker's copied context,
+# so an error envelope built later in the same handler sees it.
+_intuit_tid_var: ContextVar[str | None] = ContextVar("intuit_tid", default=None)
+
+
+def get_intuit_tid() -> str | None:
+    return _intuit_tid_var.get()
+
+
+def set_intuit_tid(value: str | None) -> None:
+    _intuit_tid_var.set(value)
