@@ -17,6 +17,7 @@ they're safe to run against the shared sandbox realm.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 
 import httpx
@@ -42,10 +43,11 @@ def _identity_token() -> str:
         return token.strip()
     try:
         out = subprocess.run(
-            ["gcloud", "auth", "print-identity-token"],
+            [shutil.which("gcloud") or "gcloud", "auth", "print-identity-token"],
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pytest.skip("no QBSVC_LIVE_ID_TOKEN and gcloud is unavailable")

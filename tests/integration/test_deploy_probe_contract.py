@@ -64,7 +64,6 @@ def test_startup_probe_path_is_documented_as_container_direct():
     """The probe deliberately uses a path the GFE may intercept externally;
     guard the comment that explains why so it isn't 'fixed' into a wrong path.
     """
-    text = CLOUD_RUN_YAML.read_text(encoding="utf-8")
     # The probe path is /healthz today; if that ever changes, this test should
     # be revisited together with the deploy.sh / iam-setup.md guidance that
     # routes *external* checks to /readyz.
