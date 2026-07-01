@@ -91,8 +91,102 @@ def callback(
     return _success_html(realmId)
 
 
+@router.get("/disconnect")
+def disconnect_confirm(
+    token_store: TokenStore = Depends(get_token_store),
+) -> HTMLResponse:
+    """Operator-facing confirmation page for tearing down the QBO connection.
+
+    This is the target of the Intuit app's *Disconnect URL*. The page is
+    informational + a confirm button; the actual revoke happens on POST. The
+    whole `/admin/*` surface is IAM- and allowlist-gated, so only the operator
+    can reach it — a fully public self-service disconnect would be a DoS vector
+    against this single-tenant integration's one shared connection.
+    """
+    connected = token_store.load() is not None
+    return _disconnect_confirm_html(connected)
+
+
+@router.post("/disconnect")
+def disconnect(
+    settings: Settings = Depends(get_settings),
+    token_store: TokenStore = Depends(get_token_store),
+) -> HTMLResponse:
+    """Revoke the QBO connection at Intuit, then clear the persisted token.
+
+    Order matters: revoke first, and only clear local state once Intuit
+    confirms. If revoke fails we leave the token in place so the operator can
+    retry rather than lose it to a transient error.
+    """
+    tokens = token_store.load()
+    if tokens is None:
+        # Idempotent: nothing to revoke or clear.
+        return _disconnect_result_html(
+            "No active QuickBooks connection — already disconnected.", 200
+        )
+
+    try:
+        oauth_mod.revoke(settings, tokens.refresh_token)
+    except AuthError as e:
+        return _html(
+            f"Disconnect failed — token NOT revoked and the connection was "
+            f"left intact so you can retry: {e}",
+            502,
+        )
+
+    try:
+        token_store.clear()
+    except TokenStoreError as e:
+        # Revoke succeeded, so the token is now dead at Intuit, but it's still
+        # persisted locally. Surface loudly — the next QBO call would fail on a
+        # revoked token until the store is cleared.
+        return _html(
+            f"Token revoked at Intuit but FAILED TO CLEAR local store: {e} — "
+            "the stored token is now dead; clear it before re-connecting.",
+            500,
+        )
+
+    return _disconnect_result_html(
+        "QuickBooks disconnected. The stored token was revoked and cleared; "
+        "the service now reports not-authenticated until you re-connect at "
+        "/admin/oauth/start.",
+        200,
+    )
+
+
 def _html(message: str, status_code: int) -> HTMLResponse:
     """Render `message` as plain text inside a minimal HTML page. Always escapes."""
+    body = (
+        "<!doctype html><html><body style='font-family:sans-serif;padding:2rem'>"
+        f"<h2>{html.escape(message)}</h2></body></html>"
+    )
+    return HTMLResponse(body, status_code=status_code)
+
+
+def _disconnect_confirm_html(connected: bool) -> HTMLResponse:
+    if connected:
+        status_line = "A QuickBooks connection is currently active."
+        button = (
+            "<form method='post' action='/admin/oauth/disconnect'>"
+            "<button type='submit'>Disconnect QuickBooks</button></form>"
+        )
+    else:
+        status_line = "No QuickBooks connection is currently active."
+        button = "<p>Nothing to disconnect.</p>"
+    body = (
+        "<!doctype html><html><body style='font-family:sans-serif;padding:2rem'>"
+        "<h2>Disconnect QuickBooks</h2>"
+        f"<p>{status_line}</p>"
+        "<p>Disconnecting revokes the stored token at Intuit and clears it "
+        "from this service. QuickBooks calls will report not-authenticated "
+        "until an operator re-connects.</p>"
+        f"{button}"
+        "</body></html>"
+    )
+    return HTMLResponse(body, status_code=200)
+
+
+def _disconnect_result_html(message: str, status_code: int) -> HTMLResponse:
     body = (
         "<!doctype html><html><body style='font-family:sans-serif;padding:2rem'>"
         f"<h2>{html.escape(message)}</h2></body></html>"
