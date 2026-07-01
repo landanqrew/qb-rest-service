@@ -447,6 +447,29 @@ def test_disconnect_leaves_qbo_calls_not_authenticated(client, token_store, monk
         qb.close()
 
 
+def test_disconnect_holds_refresh_lock_during_revoke(client, token_store, monkeypatch):
+    """The load -> revoke -> clear sequence must run under refresh_lock so a
+    concurrent QBClient refresh can't rotate the token mid-disconnect. Assert
+    the lock is held at the moment revoke fires on Intuit.
+    """
+    _connected(token_store)
+    observed = {}
+
+    def fake_post(url, *, auth=None, json=None, data=None, **kwargs):
+        observed["locked_during_revoke"] = token_store.refresh_lock.locked()
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, request=req)
+
+    monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", fake_post)
+
+    resp = client.post("/admin/oauth/disconnect")
+
+    assert resp.status_code == 200
+    assert observed["locked_during_revoke"] is True
+    # Lock released after the handler returns.
+    assert token_store.refresh_lock.locked() is False
+
+
 def test_disconnect_when_not_connected_is_noop(client, token_store, monkeypatch):
     monkeypatch.setattr(
         "qbsvc.auth.oauth.httpx.post",

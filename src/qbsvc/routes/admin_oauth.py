@@ -117,36 +117,45 @@ def disconnect(
     Order matters: revoke first, and only clear local state once Intuit
     confirms. If revoke fails we leave the token in place so the operator can
     retry rather than lose it to a transient error.
+
+    The whole load -> revoke -> clear sequence runs under
+    `token_store.refresh_lock` — the same lock `QBClient._refresh_tokens()`
+    holds around its load -> refresh -> save path. Without it a concurrent
+    QBO-triggered refresh could interleave: revoke might fire on a token
+    Intuit already rotated, or worse, a refresh `save()` could land between
+    `revoke()` and `clear()`, leaving `clear()` to wipe a live, un-revoked
+    token. Holding the lock makes disconnect and refresh mutually exclusive.
     """
-    tokens = token_store.load()
-    if tokens is None:
-        # Idempotent: nothing to revoke or clear.
-        return _disconnect_result_html(
-            "No active QuickBooks connection — already disconnected.", 200
-        )
+    with token_store.refresh_lock:
+        tokens = token_store.load()
+        if tokens is None:
+            # Idempotent: nothing to revoke or clear.
+            return _html(
+                "No active QuickBooks connection — already disconnected.", 200
+            )
 
-    try:
-        oauth_mod.revoke(settings, tokens.refresh_token)
-    except AuthError as e:
-        return _html(
-            f"Disconnect failed — token NOT revoked and the connection was "
-            f"left intact so you can retry: {e}",
-            502,
-        )
+        try:
+            oauth_mod.revoke(settings, tokens.refresh_token)
+        except AuthError as e:
+            return _html(
+                f"Disconnect failed — token NOT revoked and the connection was "
+                f"left intact so you can retry: {e}",
+                502,
+            )
 
-    try:
-        token_store.clear()
-    except TokenStoreError as e:
-        # Revoke succeeded, so the token is now dead at Intuit, but it's still
-        # persisted locally. Surface loudly — the next QBO call would fail on a
-        # revoked token until the store is cleared.
-        return _html(
-            f"Token revoked at Intuit but FAILED TO CLEAR local store: {e} — "
-            "the stored token is now dead; clear it before re-connecting.",
-            500,
-        )
+        try:
+            token_store.clear()
+        except TokenStoreError as e:
+            # Revoke succeeded, so the token is now dead at Intuit, but it's
+            # still persisted locally. Surface loudly — the next QBO call would
+            # fail on a revoked token until the store is cleared.
+            return _html(
+                f"Token revoked at Intuit but FAILED TO CLEAR local store: {e} — "
+                "the stored token is now dead; clear it before re-connecting.",
+                500,
+            )
 
-    return _disconnect_result_html(
+    return _html(
         "QuickBooks disconnected. The stored token was revoked and cleared; "
         "the service now reports not-authenticated until you re-connect at "
         "/admin/oauth/start.",
@@ -184,14 +193,6 @@ def _disconnect_confirm_html(connected: bool) -> HTMLResponse:
         "</body></html>"
     )
     return HTMLResponse(body, status_code=200)
-
-
-def _disconnect_result_html(message: str, status_code: int) -> HTMLResponse:
-    body = (
-        "<!doctype html><html><body style='font-family:sans-serif;padding:2rem'>"
-        f"<h2>{html.escape(message)}</h2></body></html>"
-    )
-    return HTMLResponse(body, status_code=status_code)
 
 
 def _success_html(realm_id: str) -> HTMLResponse:
