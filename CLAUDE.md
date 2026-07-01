@@ -14,7 +14,7 @@ See [`docs/qb-service-scope.md`](docs/qb-service-scope.md) — that doc is the s
 ## Running locally
 - `uv sync` to install dependencies.
 - `uv run uvicorn qbsvc.main:app --reload --port 8080` to start the server.
-- `curl http://localhost:8080/healthz` to smoke-check.
+- `curl http://localhost:8080/healthz` to smoke-check locally. Against the deployed Cloud Run URL use `/readyz` instead — Google's frontend intercepts the literal `/healthz` path on `run.app` domains (404 before the container). `/healthz` stays valid locally and for the container-internal startup probe.
 
 ## Package Layout
 Src layout: `src/qbsvc/`. Build backend: setuptools.

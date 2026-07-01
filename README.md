@@ -22,6 +22,11 @@ curl http://localhost:8080/healthz
 # {"status":"ok"}
 ```
 
+> **Deployed (Cloud Run)?** Smoke-check with `/readyz`, not `/healthz`. Google's
+> frontend intercepts the literal `/healthz` path on `run.app` domains and 404s
+> it before the container is reached. `/healthz` still works locally and for the
+> container-internal startup probe; external checks must use `/readyz`.
+
 ## Layout
 
 ```
