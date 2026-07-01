@@ -63,6 +63,29 @@ def exchange_code(
     return _parse_token_response(resp.json(), realm_id)
 
 
+def revoke(settings: Settings, token: str) -> None:
+    """Revoke a token at Intuit's revocation endpoint.
+
+    Pass the refresh token: revoking it invalidates the whole grant (the
+    paired access token is revoked with it). The endpoint comes from the
+    discovery document (see qbsvc.auth.discovery), and auth is HTTP Basic
+    with the app's client credentials — same as the token exchange.
+
+    Raises AuthError on any non-200 so callers can decide whether to tear
+    down local state (the disconnect route keeps the token on failure).
+    """
+    _require_creds(settings)
+
+    resp = httpx.post(
+        get_discovery(settings).revocation_endpoint,
+        auth=(settings.intuit_client_id, settings.intuit_client_secret),
+        json={"token": token},
+    )
+
+    if resp.status_code != 200:
+        raise AuthError(f"Token revoke failed ({resp.status_code}): {resp.text}")
+
+
 def _require_creds(settings: Settings) -> None:
     missing = [
         name

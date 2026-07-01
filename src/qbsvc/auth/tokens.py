@@ -57,6 +57,15 @@ class TokenStore(Protocol):
 
     def save(self, tokens: TokenData) -> None: ...
 
+    def clear(self) -> None:
+        """Remove the stored token so `load()` returns None.
+
+        Used by the OAuth disconnect flow after the token is revoked at
+        Intuit. Must be idempotent — clearing an already-empty store is a
+        no-op, not an error.
+        """
+        ...
+
 
 class FileTokenStore:
     """Token store backed by a JSON file on disk.
@@ -84,3 +93,8 @@ class FileTokenStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(tokens.to_dict(), indent=2) + "\n")
         self.path.chmod(0o600)
+
+    def clear(self) -> None:
+        # Delete the file outright — the local dev store has no version history
+        # to preserve. Idempotent: missing file is fine.
+        self.path.unlink(missing_ok=True)
