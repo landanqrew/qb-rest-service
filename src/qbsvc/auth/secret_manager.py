@@ -7,6 +7,10 @@ from typing import Any
 from qbsvc.auth.tokens import TokenData
 from qbsvc.exceptions import TokenStoreError
 
+# Written by clear() to mark the connection as torn down. An empty JSON object
+# has none of TokenData's required keys, so load() resolves it to None.
+_TOMBSTONE = b"{}"
+
 
 class SecretManagerTokenStore:
     """GCP Secret Manager-backed TokenStore.
@@ -87,4 +91,22 @@ class SecretManagerTokenStore:
             # token — surface the failure loudly instead of swallowing it.
             raise TokenStoreError(
                 f"Failed to persist rotated token to {parent}: {exc}"
+            ) from exc
+
+    def clear(self) -> None:
+        from google.api_core import exceptions as gax_exc
+
+        # The store never deletes versions (see class docstring) — disabling or
+        # destroying history would forfeit the recovery path. Instead append a
+        # tombstone version: an empty JSON object that `load()` parses back to
+        # None (no required keys), so the store reads as not-authenticated while
+        # the prior token versions remain in history for audit.
+        parent = f"projects/{self._project}/secrets/{self._secret}"
+        try:
+            self._client.add_secret_version(
+                request={"parent": parent, "payload": {"data": _TOMBSTONE}}
+            )
+        except gax_exc.GoogleAPICallError as exc:
+            raise TokenStoreError(
+                f"Failed to write disconnect tombstone to {parent}: {exc}"
             ) from exc

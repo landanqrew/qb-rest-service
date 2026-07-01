@@ -57,3 +57,22 @@ def test_file_token_store_missing_keys_returns_none(tmp_path: Path):
 def test_file_token_store_satisfies_protocol(tmp_path: Path):
     store = FileTokenStore(path=tmp_path / "tokens.json")
     assert isinstance(store, TokenStore)
+
+
+def test_file_token_store_clear_removes_tokens(tmp_path: Path):
+    path = tmp_path / "tokens.json"
+    store = FileTokenStore(path=path)
+    store.save(_sample())
+    assert store.load() is not None
+
+    store.clear()
+
+    assert store.load() is None
+    assert not path.exists()
+
+
+def test_file_token_store_clear_is_idempotent_when_absent(tmp_path: Path):
+    # Disconnecting when nothing is stored must not raise.
+    store = FileTokenStore(path=tmp_path / "tokens.json")
+    store.clear()
+    assert store.load() is None

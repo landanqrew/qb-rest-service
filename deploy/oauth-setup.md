@@ -213,6 +213,62 @@ flow — §3 for dev/sandbox, **§3a for production**. The new refresh token
 overwrites the stored one — for the Secret Manager backend, that means a new
 secret version is added.
 
+## 4b. Disconnect / revoke (issue #49)
+
+The Intuit app-assessment questionnaire requires a **Disconnect URL** — where a
+customer goes to tear down their connection. qb-service exposes this as an
+**admin-only** route:
+
+```
+GET  /admin/oauth/disconnect   # confirmation page (is a connection active?)
+POST /admin/oauth/disconnect   # revoke at Intuit, then clear the stored token
+```
+
+The `POST` handler:
+
+1. Loads the stored token. If there is none, it's a no-op (already
+   disconnected).
+2. **Revokes** the refresh token at the discovery document's
+   `revocation_endpoint` (HTTP Basic auth with the client credentials,
+   `{"token": …}` body). Revoking the refresh token invalidates the whole grant.
+3. On a successful revoke, **clears** the `TokenStore`. For the Secret Manager
+   backend this appends a tombstone version (an empty JSON object) rather than
+   deleting history, so `load()` reads as not-authenticated while prior token
+   versions remain for audit. For the file backend it deletes the file.
+
+After a successful disconnect, subsequent QBO calls return `NOT_AUTHENTICATED`
+until the operator re-connects via §3 / §3a.
+
+**Failure handling.** If the revoke call returns non-200, the route returns
+`502` and **leaves the stored token in place** — a transient revoke error must
+not cost the operator their connection; retry the disconnect. If the revoke
+succeeds but the store clear fails, the route returns `500` with a loud message
+(the token is now dead at Intuit but still persisted locally — clear it before
+re-connecting).
+
+### Reachability decision (admin-only)
+
+`/admin/*` is IAM-locked (`--no-allow-unauthenticated`) **and**
+email-allowlisted (`AdminGateMiddleware`), so the disconnect route has the same
+edge posture as `/admin/oauth/start` (see §3a): an unauthenticated browser gets
+`403`. That is deliberate. Because this is a **single-tenant** integration with
+one shared realm connection, a fully public self-service disconnect would be an
+abuse/DoS vector — anyone could revoke the operator's only connection. We
+therefore keep disconnect operator-gated rather than adding a public
+self-service page on qb-pages (whose surface stays frozen at three static
+pages).
+
+**Intuit Disconnect URL to register:** set the questionnaire's Disconnect URL to
+
+```
+https://<qb-service-domain>/admin/oauth/disconnect
+```
+
+An Intuit reviewer's browser will see the standard `403` (no Cloud Run identity
+token) — the same constraint that applies to the connect/reconnect URL. The
+operator reaches it authenticated through the identity-injecting forwarder used
+for the connect flow (§3).
+
 ## Admin gate (issue #13)
 
 `/admin/oauth/*` is operator-only — the Lab Intake web app's runtime service
@@ -291,6 +347,8 @@ bootstrap), the two-service split is still available as a follow-up.
 | `500 OAuth not configured`                      | `QBSVC_INTUIT_CLIENT_ID`, `QBSVC_INTUIT_CLIENT_SECRET`, or `QBSVC_OAUTH_REDIRECT_URI` is missing from the environment. |
 | `500 Tokens exchanged but FAILED TO SAVE: …`    | Intuit issued a new refresh token but the configured `TokenStore` rejected the write (e.g. Secret Manager outage / IAM). The new token is lost — re-run `/admin/oauth/start` once the backend is reachable. |
 | `403 ADMIN_FORBIDDEN` from `/admin/oauth/*`     | Caller's email isn't on `QBSVC_ADMIN_ALLOWLIST` (or the env var is missing in prod). Add the identity to the allowlist and redeploy. Local-dev surprise: setting `QBSVC_ADMIN_ALLOWLIST` without supplying a bearer token will also 403. |
+| `502 Disconnect failed — token NOT revoked …`   | Intuit's revoke endpoint returned non-200 (network, already-invalid token, or bad creds). The stored token was left intact — retry `/admin/oauth/disconnect`. |
+| `500 Token revoked at Intuit but FAILED TO CLEAR …` | Revoke succeeded but the `TokenStore` write failed (Secret Manager outage / IAM). The token is dead at Intuit but still persisted — re-run disconnect once the backend is reachable, or re-auth. |
 
 ## See also
 

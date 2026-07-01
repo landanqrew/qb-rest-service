@@ -226,6 +226,43 @@ def test_save_preserves_original_gcp_exception_as_cause():
     assert excinfo.value.__cause__ is underlying
 
 
+def test_clear_makes_load_return_none_via_tombstone_version():
+    """Disconnect must leave the store reading as not-authenticated. Since the
+    backend never deletes versions, clear() appends a tombstone version that
+    load() parses back to None.
+    """
+    client = _fake_client_with_versions()
+    store = _store(client)
+    store.save(_sample())
+    assert store.load() is not None
+
+    store.clear()
+
+    assert store.load() is None
+
+
+def test_clear_appends_a_version_without_deleting_history():
+    """The tombstone must be a new version, not a destructive delete — the
+    prior token versions stay in history for audit/recovery.
+    """
+    client = _fake_client_with_versions()
+    store = _store(client)
+    store.save(_sample())
+
+    store.clear()
+
+    # save (1) + clear (2) → two appended versions, none removed.
+    assert client.add_secret_version.call_count == 2
+    assert len(client._versions) == 2
+
+
+def test_clear_raises_token_store_error_when_gcp_call_fails():
+    client = MagicMock()
+    client.add_secret_version.side_effect = gax_exc.ServiceUnavailable("503")
+    with pytest.raises(TokenStoreError):
+        _store(client).clear()
+
+
 def test_constructor_rejects_missing_required_args():
     client = MagicMock()
     with pytest.raises(ValueError, match="project_id"):

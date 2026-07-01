@@ -380,6 +380,166 @@ def test_callback_escapes_realm_id_in_success_response(
     assert "&lt;script&gt;" in resp.text
 
 
+# ---------- /admin/oauth/disconnect ----------
+
+
+def _connected(token_store) -> None:
+    token_store.save(
+        TokenData(
+            access_token="live-access",
+            refresh_token="live-refresh",
+            realm_id="9341454312345678",
+            expires_at=9_999_999_999.0,
+        )
+    )
+
+
+def _mock_revoke_ok(monkeypatch):
+    """Patch httpx.post so Intuit's revoke returns 200 and records the call."""
+    calls = []
+
+    def fake_post(url, *, auth=None, json=None, data=None, **kwargs):
+        calls.append({"url": url, "auth": auth, "json": json})
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, request=req)
+
+    monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", fake_post)
+    return calls
+
+
+def test_disconnect_get_renders_confirmation_page(client, token_store):
+    _connected(token_store)
+    resp = client.get("/admin/oauth/disconnect")
+    assert resp.status_code == 200
+    assert "disconnect" in resp.text.lower()
+
+
+def test_disconnect_post_revokes_and_clears_token(client, token_store, monkeypatch):
+    _connected(token_store)
+    calls = _mock_revoke_ok(monkeypatch)
+
+    resp = client.post("/admin/oauth/disconnect")
+
+    assert resp.status_code == 200
+    # Revoked the refresh token at Intuit with Basic auth.
+    assert len(calls) == 1
+    assert "revoke" in calls[0]["url"]
+    assert calls[0]["auth"] == ("test-client-id", "test-secret")
+    assert calls[0]["json"] == {"token": "live-refresh"}
+    # Local token cleared.
+    assert token_store.load() is None
+
+
+def test_disconnect_leaves_qbo_calls_not_authenticated(client, token_store, monkeypatch):
+    from qbsvc.api.client import QBClient
+    from qbsvc.exceptions import NotAuthenticatedError
+
+    _connected(token_store)
+    _mock_revoke_ok(monkeypatch)
+
+    client.post("/admin/oauth/disconnect")
+
+    qb = QBClient(token_store=token_store, settings=Settings())
+    try:
+        with pytest.raises(NotAuthenticatedError):
+            qb.ensure_ready()
+    finally:
+        qb.close()
+
+
+def test_disconnect_holds_refresh_lock_during_revoke(client, token_store, monkeypatch):
+    """The load -> revoke -> clear sequence must run under refresh_lock so a
+    concurrent QBClient refresh can't rotate the token mid-disconnect. Assert
+    the lock is held at the moment revoke fires on Intuit.
+    """
+    _connected(token_store)
+    observed = {}
+
+    def fake_post(url, *, auth=None, json=None, data=None, **kwargs):
+        observed["locked_during_revoke"] = token_store.refresh_lock.locked()
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, request=req)
+
+    monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", fake_post)
+
+    resp = client.post("/admin/oauth/disconnect")
+
+    assert resp.status_code == 200
+    assert observed["locked_during_revoke"] is True
+    # Lock released after the handler returns.
+    assert token_store.refresh_lock.locked() is False
+
+
+def test_disconnect_when_not_connected_is_noop(client, token_store, monkeypatch):
+    monkeypatch.setattr(
+        "qbsvc.auth.oauth.httpx.post",
+        lambda *a, **k: pytest.fail("revoke must not be called when nothing is stored"),
+    )
+    resp = client.post("/admin/oauth/disconnect")
+    assert resp.status_code == 200
+    assert token_store.load() is None
+
+
+def test_disconnect_revoke_failure_preserves_token(client, token_store, monkeypatch):
+    _connected(token_store)
+
+    def failing_post(url, *, auth=None, json=None, **kwargs):
+        req = httpx.Request("POST", url)
+        return httpx.Response(400, text="invalid_token", request=req)
+
+    monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", failing_post)
+
+    resp = client.post("/admin/oauth/disconnect")
+
+    assert resp.status_code == 502
+    # Revoke failed — we must NOT have torn down the local connection, so the
+    # operator can retry rather than lose the token to a transient error.
+    saved = token_store.load()
+    assert saved is not None
+    assert saved.refresh_token == "live-refresh"
+
+
+def test_disconnect_clear_failure_returns_500(settings_env, state_store, monkeypatch):
+    """If revoke succeeds but the store fails to clear, surface it loudly — the
+    token is now dead at Intuit but still persisted locally.
+    """
+    import threading
+
+    from qbsvc.exceptions import TokenStoreError
+
+    class ClearFailsStore:
+        refresh_lock = threading.Lock()
+
+        def load(self):
+            return TokenData(
+                access_token="a",
+                refresh_token="r",
+                realm_id="1",
+                expires_at=9_999_999_999.0,
+            )
+
+        def save(self, tokens):  # pragma: no cover - not exercised here
+            pass
+
+        def clear(self):
+            raise TokenStoreError("Secret Manager unreachable: 503")
+
+    def ok_post(url, *, auth=None, json=None, **kwargs):
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, request=req)
+
+    monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", ok_post)
+
+    app = create_app()
+    app.dependency_overrides[get_oauth_state_store] = lambda: state_store
+    app.dependency_overrides[get_token_store] = lambda: ClearFailsStore()
+    c = TestClient(app, follow_redirects=False)
+
+    resp = c.post("/admin/oauth/disconnect")
+    assert resp.status_code == 500
+    assert "FAILED TO CLEAR" in resp.text
+
+
 def test_state_store_dependency_is_memoized():
     """One state store per process so /start and /callback share entries
     across requests."""
