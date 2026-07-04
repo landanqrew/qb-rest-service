@@ -1,0 +1,109 @@
+# Knative service manifest for qb-admin on Cloud Run (issue #51).
+#
+# qb-admin is the PUBLIC, browser-safe OAuth bootstrap companion to the
+# IAM-locked qb-service. Same image, different service:
+#   qb-service : --no-allow-unauthenticated, data /v1/* only (admin routes OFF).
+#   qb-admin   : PUBLIC, /admin/oauth/* only (data routes OFF).
+#
+# Public at the edge but NOT open: /admin/oauth/{start,disconnect} require a
+# signed launch token (QBSVC_ADMIN_LAUNCH_SECRET) minted by the consuming app.
+#
+# Applied via `gcloud run services replace deploy/qb-admin.cloud-run.yaml` once
+# the substitutions are filled in. `deploy/qb-admin.deploy.sh` is the easier
+# entrypoint. NOTE: making the service public is a separate IAM binding
+# (allUsers -> roles/run.invoker) that the deploy script applies via
+# --allow-unauthenticated; this manifest alone does not grant it.
+#
+# Placeholders (substitute before applying):
+#   PROJECT_ID   — GCP project hosting Cloud Run + Secret Manager
+#   IMAGE        — the SAME qb-service image, e.g.
+#                  us-central1-docker.pkg.dev/PROJECT_ID/qb-service/qb-service:GIT_SHA
+#   SERVICE_URL  — the full https URL Cloud Run assigns THIS service; must match
+#                  byte-for-byte the redirect URI registered in the Intuit console
+#   REALM_ID     — Intuit realm (company) ID
+#   RETURN_URL   — consuming app URL to return the browser to after connect
+#
+# Secret Manager secrets referenced (see deploy/iam-setup.md and
+# deploy/qb-admin-setup.md):
+#   mwl-qb-client-id       — Intuit OAuth client ID
+#   mwl-qb-client-secret   — Intuit OAuth client secret
+#   mwl-qb-tokens          — rotated token blob, SHARED with qb-service
+#   mwl-qb-admin-launch    — shared launch-token secret (also held by the app)
+#
+# This service deliberately does NOT set QBSVC_ADMIN_ALLOWLIST: an IAM email
+# allowlist is meaningless for a public service with no inbound JWT. The
+# launch-token gate protects /admin/oauth/*.
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: qb-admin
+  annotations:
+    run.googleapis.com/launch-stage: GA
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "4"
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      serviceAccountName: qb-admin-runtime@PROJECT_ID.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 60
+      containers:
+        - name: qb-admin
+          image: IMAGE
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            # Admin OAuth bootstrap only — data API is off on this public surface.
+            - name: QBSVC_ENABLE_DATA_ROUTES
+              value: "false"
+            - name: QBSVC_ENABLE_ADMIN_ROUTES
+              value: "true"
+            - name: QBSVC_TOKEN_BACKEND
+              value: secret_manager
+            - name: QBSVC_GCP_PROJECT
+              value: PROJECT_ID
+            - name: QBSVC_REALM_ID
+              value: REALM_ID
+            - name: QBSVC_OAUTH_REDIRECT_URI
+              value: SERVICE_URL/admin/oauth/callback
+            - name: QBSVC_SECRET_NAME_TOKENS
+              value: mwl-qb-tokens
+            - name: QBSVC_ADMIN_RETURN_URL
+              value: RETURN_URL
+            - name: QBSVC_INTUIT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mwl-qb-client-id
+                  key: latest
+            - name: QBSVC_INTUIT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mwl-qb-client-secret
+                  key: latest
+            - name: QBSVC_ADMIN_LAUNCH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mwl-qb-admin-launch
+                  key: latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            timeoutSeconds: 4
+            periodSeconds: 4
+            failureThreshold: 10
+  traffic:
+    - latestRevision: true
+      percent: 100
