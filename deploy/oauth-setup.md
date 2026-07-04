@@ -1,8 +1,14 @@
 # Intuit OAuth — first-time setup
 
-qb-service hosts its own OAuth handshake at `/admin/oauth/start` and
-`/admin/oauth/callback`. No CLI, no laptop browser callback, no manual
-Secret Manager edits in the normal case.
+The OAuth handshake (`/admin/oauth/start` + `/admin/oauth/callback`) runs on
+the **qb-admin** service — a public, browser-safe companion that shares
+qb-service's image and its `mwl-qb-tokens` secret (issue #52). The deployed
+**qb-service** is IAM-locked and data-only (`QBSVC_ENABLE_ADMIN_ROUTES=false`),
+so it no longer hosts those routes. See
+[`qb-admin-setup.md`](qb-admin-setup.md) for the production browser flow; this
+doc covers registering the Intuit callback and the local-forwarder bootstrap
+(§3a) that also writes the shared token secret. No CLI, no laptop browser
+callback, no manual Secret Manager edits in the normal case.
 
 ## Deployed service URLs (2026-06-06, project `qrew-tech-1526597818524`)
 

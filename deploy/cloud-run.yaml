@@ -1,4 +1,7 @@
-# Knative service manifest for qb-service on Cloud Run.
+# Knative service manifest for qb-service on Cloud Run — the IAM-locked DATA
+# API only. The browser OAuth admin surface (/admin/oauth/*) is disabled here
+# (QBSVC_ENABLE_ADMIN_ROUTES=false, issue #52) and served instead by the
+# separate public qb-admin service (deploy/qb-admin.cloud-run.yaml).
 #
 # Applied via `gcloud run services replace deploy/cloud-run.yaml` once the
 # substitutions below are filled in. `deploy/deploy.sh` is the easier
@@ -10,14 +13,7 @@
 #   REGION            — Cloud Run region, e.g. us-central1
 #   IMAGE             — fully-qualified container image, e.g.
 #                       us-central1-docker.pkg.dev/PROJECT_ID/qb-service/qb-service:GIT_SHA
-#   SERVICE_URL       — the full https URL Cloud Run assigns the service
-#                       (e.g. https://qb-service-abc.a.run.app), substituted as-is
-#                       into the redirect URI below; must match byte-for-byte the
-#                       URI registered in the Intuit developer console
 #   REALM_ID          — Intuit realm (company) ID for Martin Water Labs
-#   ADMIN_ALLOWLIST   — comma-separated emails allowed to reach /admin/*
-#                       (issue #13 gate; see deploy/oauth-setup.md §"Admin gate").
-#                       Must include the operator identity that bootstraps OAuth.
 #
 # Secret Manager secrets referenced (see deploy/iam-setup.md):
 #   mwl-qb-client-id      — Intuit OAuth client ID
@@ -52,18 +48,21 @@ spec:
             - name: http1
               containerPort: 8080
           env:
+            # Data API only (issue #52): the browser OAuth admin surface
+            # (/admin/oauth/*) is NOT hosted on this IAM-locked service. OAuth
+            # bootstrap runs on the separate public qb-admin service
+            # (deploy/qb-admin.cloud-run.yaml). No QBSVC_OAUTH_REDIRECT_URI or
+            # QBSVC_ADMIN_ALLOWLIST here — both are admin-surface concerns.
+            - name: QBSVC_ENABLE_ADMIN_ROUTES
+              value: "false"
             - name: QBSVC_TOKEN_BACKEND
               value: secret_manager
             - name: QBSVC_GCP_PROJECT
               value: PROJECT_ID
             - name: QBSVC_REALM_ID
               value: REALM_ID
-            - name: QBSVC_OAUTH_REDIRECT_URI
-              value: SERVICE_URL/admin/oauth/callback
             - name: QBSVC_SECRET_NAME_TOKENS
               value: mwl-qb-tokens
-            - name: QBSVC_ADMIN_ALLOWLIST
-              value: ADMIN_ALLOWLIST
             - name: QBSVC_INTUIT_CLIENT_ID
               valueFrom:
                 secretKeyRef:
