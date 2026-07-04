@@ -63,7 +63,7 @@ Set on the qb-service deployment (Cloud Run env vars, `.env` locally):
 | `QBSVC_OAUTH_REDIRECT_URI`    | `https://<qb-service-domain>/admin/oauth/callback`      | **Must match** the URL registered in the Intuit console, byte-for-byte. |
 | `QBSVC_OAUTH_STATE_TTL_SECONDS` | `600` (default)                                       | How long a CSRF state token stays valid between `/start` and `/callback`. |
 | `QBSVC_TOKEN_BACKEND`         | `file` (dev) or `secret_manager` (prod)                 | Where the rotated refresh token is persisted.                        |
-| `QBSVC_ADMIN_ALLOWLIST`       | `you@example.com,backup-admin@example.com`              | Comma-separated emails allowed to reach `/admin/*`. **Required in prod** (see "Admin gate" below). Empty disables the gate (local dev). |
+| `QBSVC_ADMIN_ALLOWLIST`       | `you@example.com,backup-admin@example.com`              | Comma-separated emails allowed to reach `/admin/*`. Required only for a deployment that serves `/admin/*` behind Cloud Run IAM (see "Admin gate" below); not set on data-only qb-service or public qb-admin. Empty disables the gate (local dev). |
 
 ## 3. Run the authorization flow
 
@@ -328,20 +328,31 @@ QBSVC_ADMIN_ALLOWLIST=you@example.com,backup-admin@example.com
 ```
 
 If the env var is unset or empty the gate is **OFF**. That's the right
-default for local dev (no Cloud Run, no JWT to inspect) but means
-**production deployments must set it**. `deploy/cloud-run.yaml` includes a
-placeholder you fill in before applying.
+default for local dev (no Cloud Run, no JWT to inspect).
 
-This is enforced two ways so a misconfigured deploy can't silently disable the
-gate:
+**Which service this applies to.** The IAM-allowlist gate only matters for a
+service that actually hosts `/admin/*`. Under the data/admin split (issue #52):
 
-- `deploy/deploy.sh` hard-requires `ADMIN_ALLOWLIST` (it errors before building).
-- The app itself **refuses to start on Cloud Run** with an empty allowlist:
-  `ensure_admin_gate_configured()` (called from `create_app`) raises when
-  `K_SERVICE` is set (i.e. running on Cloud Run) but the allowlist is empty, so
-  a deploy via raw `gcloud run deploy` / `services replace` fails its startup
-  probe instead of coming up wide open. Local dev and the §3a bootstrap have no
-  `K_SERVICE`, so they're unaffected and the gate stays off there as intended.
+- **qb-service** is data-only (`QBSVC_ENABLE_ADMIN_ROUTES=false`) and does **not**
+  host `/admin/*` at all — so `deploy/deploy.sh` and `deploy/cloud-run.yaml` no
+  longer set or require `QBSVC_ADMIN_ALLOWLIST`. There is nothing to gate here.
+- **qb-admin** hosts `/admin/oauth/*` but is a public browser service where a
+  caller can't present a Cloud Run JWT, so it uses the signed **launch-token**
+  gate (`QBSVC_ADMIN_LAUNCH_SECRET`) instead of the IAM allowlist. See
+  [`qb-admin-setup.md`](qb-admin-setup.md).
+
+The allowlist model below still applies to any **combined** deployment that
+serves `/admin/*` behind Cloud Run IAM (e.g. the local/dev `all` shape, or the
+§3a bootstrap against a local instance).
+
+The app **refuses to start on Cloud Run** with `/admin/*` enabled but no gate
+configured: `ensure_admin_gate_configured()` (called from `create_app`) raises
+when `K_SERVICE` is set but admin routes are on and neither
+`QBSVC_ADMIN_ALLOWLIST` nor `QBSVC_ADMIN_LAUNCH_SECRET` is set — so a deploy via
+raw `gcloud run deploy` / `services replace` fails its startup probe instead of
+coming up wide open. It no-ops when admin routes are disabled (qb-service) or a
+gate is present. Local dev and the §3a bootstrap have no `K_SERVICE`, so they're
+unaffected and the gate stays off there as intended.
 
 ### Decision (rejected option)
 

@@ -10,6 +10,7 @@ Cloud Run identity token). OAuth bootstrap belongs to `qb-admin`.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -23,6 +24,31 @@ def _script_without_no_allow(text: str) -> str:
     """Strip the `--no-allow-unauthenticated` flag so a substring check for the
     public `--allow-unauthenticated` flag can't be fooled by the locked one."""
     return text.replace("--no-allow-unauthenticated", "")
+
+
+def _yaml_env_values(text: str) -> dict[str, str | None]:
+    """Map each `env:` entry's `name` to its literal `value` (None if the entry
+    uses `valueFrom`/a secret ref, or has no inline value).
+
+    Text-parsed rather than yaml-loaded on purpose: the repo has no declared
+    PyYAML dependency (see tests/integration/test_deploy_probe_contract.py), and
+    whitespace-tolerant regex is enough to assert the env contract without
+    coupling to exact indentation.
+    """
+    env: dict[str, str | None] = {}
+    # `- name: FOO` optionally followed by a `value: "bar"` line before the next
+    # `- name:`/`valueFrom:` sibling. [^\S\n] matches indentation without eating
+    # the newline, so a reformat of the indent width doesn't break the match.
+    for m in re.finditer(
+        r"-[^\S\n]+name:[^\S\n]*(?P<name>\S+)"
+        r"(?:\s+value:[^\S\n]*(?P<value>\"[^\"]*\"|\S+))?",
+        text,
+    ):
+        value = m.group("value")
+        if value is not None:
+            value = value.strip('"')
+        env[m.group("name")] = value
+    return env
 
 
 def test_deploy_artifacts_exist():
@@ -39,6 +65,10 @@ def test_deploy_script_is_iam_locked_and_admin_routes_off():
     assert "QBSVC_ENABLE_ADMIN_ROUTES=false" in text
     # Data routes stay ON (default true) — never disabled here.
     assert "QBSVC_ENABLE_DATA_ROUTES=false" not in text
+    # No admin-surface env wiring: neither the IAM allowlist nor the OAuth
+    # callback redirect URI is set on the data service (both are qb-admin's).
+    assert "QBSVC_ADMIN_ALLOWLIST=" not in text
+    assert "QBSVC_OAUTH_REDIRECT_URI=" not in text
 
 
 def test_deploy_script_does_not_direct_operators_to_locked_oauth_start():
@@ -59,13 +89,13 @@ def test_deploy_script_does_not_direct_operators_to_locked_oauth_start():
 
 
 def test_deploy_yaml_is_data_only():
-    text = YAML.read_text(encoding="utf-8")
-    # Admin routes disabled, scoped to the same env entry as the name so an
-    # unrelated `value: "false"` elsewhere can't satisfy the check.
-    assert (
-        'name: QBSVC_ENABLE_ADMIN_ROUTES\n              value: "false"' in text
-    )
-    # The data-only manifest must not declare the OAuth callback redirect URI
-    # env var — that surface is served by qb-admin, not qb-service. (A comment
-    # explaining its absence is fine; the `name:` declaration is what's banned.)
-    assert "name: QBSVC_OAUTH_REDIRECT_URI" not in text
+    env = _yaml_env_values(YAML.read_text(encoding="utf-8"))
+    # Admin routes disabled — checked against the parsed env entry's value, not a
+    # whitespace-exact literal, so a harmless YAML reformat can't break it.
+    assert env.get("QBSVC_ENABLE_ADMIN_ROUTES") == "false"
+    # The data-only manifest must declare neither admin-surface env var — both
+    # the OAuth callback redirect URI and the IAM allowlist are qb-admin's
+    # concern. (A comment explaining their absence is fine; only a declared
+    # `env:` entry counts here.)
+    assert "QBSVC_OAUTH_REDIRECT_URI" not in env
+    assert "QBSVC_ADMIN_ALLOWLIST" not in env
