@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Build and deploy qb-service to Cloud Run.
 #
+# qb-service is the IAM-locked DATA API only (issue #52): it serves /v1/* and
+# /readyz with QBSVC_ENABLE_ADMIN_ROUTES=false, so the browser OAuth admin
+# surface (/admin/oauth/*) is NOT hosted here. OAuth bootstrap runs on the
+# separate public qb-admin service — see deploy/qb-admin.deploy.sh and
+# deploy/qb-admin-setup.md. Both services share the same image and the same
+# mwl-qb-tokens secret.
+#
 # Idempotent: re-running deploys a new revision. Routes 100% of traffic to the
 # new revision once /healthz passes the startup probe.
 #
@@ -12,10 +19,6 @@
 #   REALM_ID          Intuit realm (company) ID for Martin Water Labs
 #   RUNTIME_SA        Runtime service account email (default:
 #                       qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com)
-#   ADMIN_ALLOWLIST   Comma-separated emails permitted to call /admin/* (issue #13).
-#                       Must include the operator who bootstraps OAuth; must NOT
-#                       include the web app's runtime SA. See
-#                       deploy/oauth-setup.md §"Admin gate".
 #   INTUIT_ENV        "production" or "sandbox" (default: production). Sandbox
 #                       points the QBO client at sandbox-quickbooks.api.intuit.com
 #                       and must pair with the app's Development keys + a
@@ -27,15 +30,13 @@
 #       roles/secretmanager.secretAccessor on mwl-qb-client-id,
 #       mwl-qb-client-secret, and mwl-qb-tokens
 #   - Secrets mwl-qb-client-id and mwl-qb-client-secret already populated
-#   - Secret mwl-qb-tokens exists (can be empty; bootstrapped via /admin/oauth/start)
-#   - The Intuit OAuth redirect URI is registered in the developer console
-#     for the eventual Cloud Run service URL.
+#   - Secret mwl-qb-tokens exists (can be empty; bootstrapped via the qb-admin
+#     service's /admin/oauth/start, not this IAM-locked data service)
 
 set -euo pipefail
 
 GCP_PROJECT="${GCP_PROJECT:?GCP_PROJECT is required}"
 REALM_ID="${REALM_ID:?REALM_ID is required}"
-ADMIN_ALLOWLIST="${ADMIN_ALLOWLIST:?ADMIN_ALLOWLIST is required (comma-separated admin emails; see deploy/oauth-setup.md)}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-qb-service}"
 AR_REPO="${AR_REPO:-qb-service}"
@@ -64,13 +65,6 @@ gcloud builds submit "${REPO_ROOT}" \
   --config="${REPO_ROOT}/cloudbuild.yaml" \
   --substitutions="_IMAGE=${IMAGE}"
 
-# First deploy: derive the service URL after the fact. On subsequent deploys
-# we reuse the existing URL so the Intuit-registered OAuth redirect stays
-# byte-identical across revisions.
-EXISTING_URL="$(gcloud run services describe "${SERVICE}" \
-  --project="${GCP_PROJECT}" --region="${REGION}" \
-  --format='value(status.url)' 2>/dev/null || true)"
-
 DEPLOY_ARGS=(
   "${SERVICE}"
   --project="${GCP_PROJECT}"
@@ -86,41 +80,32 @@ DEPLOY_ARGS=(
   --timeout=60
   --port=8080
   --execution-environment=gen2
-  # ADMIN_ALLOWLIST is exported with `^|^` as the delimiter so the comma-
-  # separated email list can pass through `--set-env-vars` without being
-  # mis-parsed as multiple env vars.
-  "--set-env-vars=^|^QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_ADMIN_ALLOWLIST=${ADMIN_ALLOWLIST}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
+  # Data API only: QBSVC_ENABLE_ADMIN_ROUTES=false keeps /admin/oauth/* off this
+  # IAM-locked service (issue #52). No QBSVC_ADMIN_ALLOWLIST or
+  # QBSVC_OAUTH_REDIRECT_URI here — those are admin-surface concerns owned by
+  # qb-admin. `^|^` sets `|` as the delimiter so values can contain commas.
+  "--set-env-vars=^|^QBSVC_ENABLE_ADMIN_ROUTES=false|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
   --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest"
 )
 
-if [[ -n "${EXISTING_URL}" ]]; then
-  echo "==> Reusing existing service URL: ${EXISTING_URL}"
-  DEPLOY_ARGS+=( --update-env-vars="QBSVC_OAUTH_REDIRECT_URI=${EXISTING_URL}/admin/oauth/callback" )
-else
-  echo "==> First deploy: deploying without QBSVC_OAUTH_REDIRECT_URI; will set on a second pass"
-fi
-
-echo "==> Deploying ${SERVICE} (image ${IMAGE})"
+echo "==> Deploying ${SERVICE} (IAM-locked data API; admin OAuth routes OFF)"
 gcloud run deploy "${DEPLOY_ARGS[@]}"
 
 URL="$(gcloud run services describe "${SERVICE}" \
   --project="${GCP_PROJECT}" --region="${REGION}" \
   --format='value(status.url)')"
 
-if [[ -z "${EXISTING_URL}" ]]; then
-  echo "==> Setting QBSVC_OAUTH_REDIRECT_URI=${URL}/admin/oauth/callback on a follow-up revision"
-  gcloud run services update "${SERVICE}" \
-    --project="${GCP_PROJECT}" --region="${REGION}" \
-    --update-env-vars="QBSVC_OAUTH_REDIRECT_URI=${URL}/admin/oauth/callback"
-fi
-
 echo
 echo "Deployed: ${URL}"
 echo "Next steps:"
-echo "  1. Register ${URL}/admin/oauth/callback in the Intuit developer console."
-echo "  2. Browse to ${URL}/admin/oauth/start with an admin identity that has"
-echo "     roles/run.invoker to complete the OAuth bootstrap."
 # /readyz, not /healthz: Google's frontend intercepts the literal /healthz
 # path on run.app domains (404 before the container sees it).
-echo "  3. Verify: curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${URL}/readyz"
-echo "     (503 NOT_AUTHENTICATED is expected until the OAuth bootstrap in step 2.)"
+echo "  1. Verify: curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${URL}/readyz"
+echo "     (503 NOT_AUTHENTICATED is expected until QuickBooks is connected.)"
+echo "  2. Connect QuickBooks via the qb-admin service — this data service does"
+echo "     NOT host the browser OAuth flow. Deploy it with deploy/qb-admin.deploy.sh"
+echo "     and follow deploy/qb-admin-setup.md. Both services share mwl-qb-tokens,"
+echo "     so a connect done on qb-admin is immediately visible here."
+echo "  3. Point Sample Manager at both URLs:"
+echo "       QB_SERVICE_URL=${URL}"
+echo "       QB_OAUTH_START_URL=<qb-admin-url>/admin/oauth/start"
