@@ -72,6 +72,11 @@ spec:
               value: PROJECT_ID
             - name: QBSVC_REALM_ID
               value: REALM_ID
+            # Keep in parity with qb-admin.deploy.sh's INTUIT_ENV toggle; applying
+            # this YAML directly without it would silently fall back to the code
+            # default instead of the intended environment.
+            - name: QBSVC_INTUIT_ENVIRONMENT
+              value: production  # or sandbox
             - name: QBSVC_OAUTH_REDIRECT_URI
               value: SERVICE_URL/admin/oauth/callback
             - name: QBSVC_SECRET_NAME_TOKENS

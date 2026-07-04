@@ -94,25 +94,32 @@ def require_launch_authorization(
 ) -> None:
     """Gate browser-initiated OAuth bootstrap on a valid launch token (issue #51).
 
-    Applied to `/admin/oauth/start` and `/admin/oauth/disconnect` — the two
-    admin actions a browser initiates directly. (The callback is not gated here:
-    Intuit's redirect can't carry a launch token, and it is already protected by
-    the one-time CSRF `state` minted by the gated `/start`.)
+    Wired as a router-level dependency on the `/admin/oauth/*` router, so every
+    route there is default-deny. The OAuth callback is the sole intentional
+    exception (Intuit's browser redirect can't carry a launch token); it is
+    protected instead by the one-time CSRF `state` minted by the gated `/start`.
 
     Resolution order:
       1. Launch gate inactive (no `admin_launch_secret`) → allow. Preserves the
          existing IAM/allowlist model and local dev unchanged.
-      2. Valid launch token (query param `launch` or `X-QBSVC-Launch` header) →
-         allow. This is the browser button path.
-      3. Allowlisted Cloud Run identity token → allow. Keeps the operator's
+      2. Callback path → allow (see above).
+      3. Valid launch token (`X-QBSVC-Launch` header preferred, else `launch`
+         query param) → allow. This is the browser button path.
+      4. Allowlisted Cloud Run identity token → allow. Keeps the operator's
          identity-injecting forwarder (oauth-setup.md §3) working even when the
          launch gate is enabled on the same image.
-      4. Otherwise → 403.
+      5. Otherwise → 403.
     """
     if not settings.admin_launch_secret:
         return
 
-    token = request.query_params.get("launch") or request.headers.get("x-qbsvc-launch")
+    # The callback must stay reachable without a launch token.
+    if request.url.path.rstrip("/").endswith("/oauth/callback"):
+        return
+
+    # Prefer the header (not captured in access logs) and fall back to the query
+    # param, which a plain browser navigation (the button link) must use.
+    token = request.headers.get("x-qbsvc-launch") or request.query_params.get("launch")
     if admin_launch.verify_launch_token(token, settings.admin_launch_secret):
         return
 

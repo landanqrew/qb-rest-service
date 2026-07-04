@@ -315,6 +315,58 @@ def test_disconnect_get_allowed_with_launch_token(
     assert resp.status_code == 200
 
 
+def test_disconnect_confirm_page_threads_token_into_form(
+    monkeypatch, state_store, token_store
+):
+    """The confirm page's POST form must carry the launch token, or clicking
+    Disconnect would 403 against the same gate that let the page load."""
+    token_store.save(
+        TokenData(
+            access_token="a", refresh_token="r", realm_id="1", expires_at=9e9
+        )
+    )
+    client = _make_client(
+        monkeypatch, state_store, token_store, QBSVC_ADMIN_LAUNCH_SECRET=LAUNCH_SECRET
+    )
+    token = _launch()
+    resp = client.get("/admin/oauth/disconnect", params={"launch": token})
+    assert resp.status_code == 200
+    assert f"action='/admin/oauth/disconnect?launch={token}'" in resp.text
+
+
+def test_disconnect_post_forbidden_without_launch_token(
+    monkeypatch, state_store, token_store
+):
+    client = _make_client(
+        monkeypatch, state_store, token_store, QBSVC_ADMIN_LAUNCH_SECRET=LAUNCH_SECRET
+    )
+    resp = client.post("/admin/oauth/disconnect")
+    assert resp.status_code == 403
+
+
+def test_disconnect_post_completes_with_launch_token(
+    monkeypatch, state_store, token_store
+):
+    """End-to-end: the form-submitted POST (token in the action query string)
+    passes the gate and tears down the connection on the public deployment."""
+    token_store.save(
+        TokenData(
+            access_token="a", refresh_token="live-r", realm_id="1", expires_at=9e9
+        )
+    )
+
+    def fake_revoke(url, *, auth=None, json=None, data=None, **kwargs):
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("qbsvc.auth.oauth.httpx.post", fake_revoke)
+    client = _make_client(
+        monkeypatch, state_store, token_store, QBSVC_ADMIN_LAUNCH_SECRET=LAUNCH_SECRET
+    )
+    resp = client.post("/admin/oauth/disconnect", params={"launch": _launch()})
+    assert resp.status_code == 200
+    assert token_store.load() is None
+
+
 # --------------------------------------------------------------------------- #
 # Route-group toggles (deploy the same image as data-only or admin-only)
 # --------------------------------------------------------------------------- #

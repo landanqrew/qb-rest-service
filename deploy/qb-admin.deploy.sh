@@ -77,6 +77,20 @@ EXISTING_URL="$(gcloud run services describe "${SERVICE}" \
   --project="${GCP_PROJECT}" --region="${REGION}" \
   --format='value(status.url)' 2>/dev/null || true)"
 
+# Data routes OFF: this public surface hosts admin OAuth bootstrap only.
+# `^|^` sets `|` as the delimiter so URL values containing commas pass through.
+ENV_PAIRS="^|^QBSVC_ENABLE_DATA_ROUTES=false|QBSVC_ENABLE_ADMIN_ROUTES=true|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_ADMIN_RETURN_URL=${RETURN_URL}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
+
+if [[ -n "${EXISTING_URL}" ]]; then
+  echo "==> Reusing existing service URL: ${EXISTING_URL}"
+  # Fold the redirect URI into --set-env-vars on redeploys. It must NOT be added
+  # as a separate --update-env-vars flag: gcloud treats --set-env-vars and
+  # --update-env-vars as mutually exclusive in a single `run deploy` call.
+  ENV_PAIRS="${ENV_PAIRS}|QBSVC_OAUTH_REDIRECT_URI=${EXISTING_URL}/admin/oauth/callback"
+else
+  echo "==> First deploy: deploying without QBSVC_OAUTH_REDIRECT_URI; will set on a second pass"
+fi
+
 DEPLOY_ARGS=(
   "${SERVICE}"
   --project="${GCP_PROJECT}"
@@ -93,17 +107,9 @@ DEPLOY_ARGS=(
   --timeout=60
   --port=8080
   --execution-environment=gen2
-  # Data routes OFF: this public surface hosts admin OAuth bootstrap only.
-  "--set-env-vars=^|^QBSVC_ENABLE_DATA_ROUTES=false|QBSVC_ENABLE_ADMIN_ROUTES=true|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_ADMIN_RETURN_URL=${RETURN_URL}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
+  "--set-env-vars=${ENV_PAIRS}"
   --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest,QBSVC_ADMIN_LAUNCH_SECRET=mwl-qb-admin-launch:latest"
 )
-
-if [[ -n "${EXISTING_URL}" ]]; then
-  echo "==> Reusing existing service URL: ${EXISTING_URL}"
-  DEPLOY_ARGS+=( --update-env-vars="QBSVC_OAUTH_REDIRECT_URI=${EXISTING_URL}/admin/oauth/callback" )
-else
-  echo "==> First deploy: deploying without QBSVC_OAUTH_REDIRECT_URI; will set on a second pass"
-fi
 
 echo "==> Deploying ${SERVICE} (PUBLIC, admin OAuth bootstrap only)"
 gcloud run deploy "${DEPLOY_ARGS[@]}"

@@ -40,15 +40,25 @@ def test_deploy_script_is_public_and_data_routes_off():
 
 def test_deploy_yaml_is_public_shape_and_gated():
     text = YAML.read_text(encoding="utf-8")
-    lower = text.lower()
-    assert "qb-admin" in lower
-    assert 'value: "false"' in text and "QBSVC_ENABLE_DATA_ROUTES" in text
+    assert "qb-admin" in text.lower()
+    # Scope the value to the SAME env entry as the name, so an unrelated
+    # `value: "false"` elsewhere can't satisfy the check.
+    assert (
+        'name: QBSVC_ENABLE_DATA_ROUTES\n              value: "false"' in text
+    )
     assert "mwl-qb-admin-launch" in text
     assert "mwl-qb-tokens" in text
     # No IAM allowlist env declared on the public service (comments may name it).
     assert "name: QBSVC_ADMIN_ALLOWLIST" not in text
     # Dedicated runtime SA, not qb-service's.
     assert "qb-admin-runtime@" in text
+
+
+def test_deploy_yaml_and_script_agree_on_intuit_env_var():
+    """The manifest must carry the production/sandbox toggle so applying it
+    directly stays in parity with qb-admin.deploy.sh."""
+    assert "QBSVC_INTUIT_ENVIRONMENT" in YAML.read_text(encoding="utf-8")
+    assert "QBSVC_INTUIT_ENVIRONMENT=" in SCRIPT.read_text(encoding="utf-8")
 
 
 def test_doc_distinguishes_the_three_surfaces():
@@ -59,7 +69,8 @@ def test_doc_distinguishes_the_three_surfaces():
     assert "/v1/" in text
     assert "/admin/oauth/start" in text
     # Calls out that the consuming app never holds the Intuit token.
-    assert "never" in text.lower() and "token" in text.lower()
+    assert "never" in text.lower()
+    assert "token" in text.lower()
 
 
 @pytest.mark.parametrize("needle", ["launch token", "403", "return"])
