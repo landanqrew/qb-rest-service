@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -10,13 +11,17 @@ from qbsvc.auth.discovery import get_discovery
 from qbsvc.auth.oauth_state import OAuthStateStore
 from qbsvc.auth.tokens import TokenStore
 from qbsvc.config import Settings, get_settings
-from qbsvc.deps import get_oauth_state_store, get_token_store
+from qbsvc.deps import (
+    get_oauth_state_store,
+    get_token_store,
+    require_launch_authorization,
+)
 from qbsvc.exceptions import AuthError, TokenStoreError
 
 router = APIRouter(prefix="/admin/oauth", tags=["admin"])
 
 
-@router.get("/start")
+@router.get("/start", dependencies=[Depends(require_launch_authorization)])
 def start(
     settings: Settings = Depends(get_settings),
     state_store: OAuthStateStore = Depends(get_oauth_state_store),
@@ -88,10 +93,17 @@ def callback(
             500,
         )
 
+    # Browser-safe bootstrap (issue #51): when a return URL is configured, send
+    # the user back to the consuming app instead of a standalone success page,
+    # so a Connect-QuickBooks button flow lands them where they started. The
+    # return URL is operator-set (trusted), so there's no open-redirect risk.
+    if settings.admin_return_url:
+        return _return_redirect(settings.admin_return_url, realmId)
+
     return _success_html(realmId)
 
 
-@router.get("/disconnect")
+@router.get("/disconnect", dependencies=[Depends(require_launch_authorization)])
 def disconnect_confirm(
     token_store: TokenStore = Depends(get_token_store),
 ) -> HTMLResponse:
@@ -107,7 +119,7 @@ def disconnect_confirm(
     return _disconnect_confirm_html(connected)
 
 
-@router.post("/disconnect")
+@router.post("/disconnect", dependencies=[Depends(require_launch_authorization)])
 def disconnect(
     settings: Settings = Depends(get_settings),
     token_store: TokenStore = Depends(get_token_store),
@@ -193,6 +205,17 @@ def _disconnect_confirm_html(connected: bool) -> HTMLResponse:
         "</body></html>"
     )
     return HTMLResponse(body, status_code=200)
+
+
+def _return_redirect(return_url: str, realm_id: str) -> RedirectResponse:
+    """Redirect the browser back to the consuming app after a successful connect.
+
+    Appends `qb_connected=1` and the connected `realmId` so the app can confirm
+    the outcome. Uses 303 so the browser issues a plain GET to the app.
+    """
+    sep = "&" if "?" in return_url else "?"
+    url = f"{return_url}{sep}qb_connected=1&realmId={quote(realm_id, safe='')}"
+    return RedirectResponse(url, status_code=303)
 
 
 def _success_html(realm_id: str) -> HTMLResponse:

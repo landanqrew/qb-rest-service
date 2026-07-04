@@ -360,7 +360,7 @@ def test_startup_guard_raises_on_cloud_run_without_allowlist(monkeypatch):
     """Cloud Run sets K_SERVICE; an empty allowlist there means /admin/* is open
     to any roles/run.invoker caller. The app must refuse to start."""
     monkeypatch.setenv("K_SERVICE", "qb-service")
-    with pytest.raises(RuntimeError, match="QBSVC_ADMIN_ALLOWLIST is empty"):
+    with pytest.raises(RuntimeError, match="no gate configured"):
         ensure_admin_gate_configured(Settings(admin_allowlist=[]))
 
 
