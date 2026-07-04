@@ -60,6 +60,30 @@ See [`deploy/qb-pages-setup.md`](deploy/qb-pages-setup.md) for the full setup
 verification). The EULA and privacy drafts are boilerplate marked **DRAFT** and
 need human review before Intuit submission.
 
+## Browser OAuth bootstrap companion (`qb-admin`)
+
+`qb-service` is IAM-locked, so a plain browser (which can't attach a Cloud Run
+identity token) can't run the Intuit OAuth handshake against it — which means a
+consuming app can't offer a real **Connect QuickBooks** button. `qb-admin`
+(issue #51) is the **same image** deployed as a second, *public* Cloud Run
+service that serves only `/admin/oauth/*` (data routes off). It's public at the
+edge but gated by a signed **launch token** the consuming app mints, so
+non-admins can't initiate the flow. Both services share the `mwl-qb-tokens`
+secret, so a connect done here is immediately live for `qb-service`.
+
+```bash
+export GCP_PROJECT=your-project-id REALM_ID=<realm> \
+       RETURN_URL=https://your-app.example.com/settings/integrations
+./deploy/qb-admin.deploy.sh
+```
+
+Three distinct surfaces, not to be confused: **readiness** (`GET
+{qb-service}/readyz`, server-to-server IAM), the **data API** (`{qb-service}/v1/*`,
+server-to-server IAM), and the **browser OAuth bootstrap**
+(`{qb-admin}/admin/oauth/start?launch=…`, app-layer launch token). See
+[`deploy/qb-admin-setup.md`](deploy/qb-admin-setup.md) for the full flow and the
+consuming-app button integration.
+
 ## Related projects
 
 - [`quickbooks-cli`](../quickbooks-cli) — the laptop CLI this service was forked from. Different use case, independent auth.

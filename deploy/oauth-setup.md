@@ -205,6 +205,23 @@ self-sustains via rotation (§4). You only repeat it on revoke / scope change /
 > local process, and the token it produces is shared via Secret Manager — so it
 > makes no difference that the handshake didn't run on the deployed service.
 
+## 3b. Browser-safe production bootstrap via `qb-admin` (issue #51)
+
+The tunnel bootstrap (§3a) is an operator fallback. For a real, user-facing
+**Connect QuickBooks** button in a consuming app, deploy the **`qb-admin`**
+companion — the same image as a *public* Cloud Run service that hosts only
+`/admin/oauth/*` (data routes off), gated by a signed **launch token** the
+consuming app mints (not Cloud Run IAM, which a browser can't satisfy). Both
+services share the `mwl-qb-tokens` secret, so a connect/re-auth done through
+`qb-admin` is immediately live for the IAM-locked `qb-service`.
+
+This replaces the throwaway tunnel for production: register
+`{qb-admin-url}/admin/oauth/callback` as the Intuit redirect URI (a public
+`https://` URL, which production keys require) and point the app's button at
+`{qb-admin-url}/admin/oauth/start?launch=<token>`. Full setup, the launch-token
+scheme, and the button integration are in
+[`qb-admin-setup.md`](qb-admin-setup.md).
+
 ## 4. Re-auth
 
 Any time the refresh token is invalidated (scope change, manual revoke,

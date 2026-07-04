@@ -64,15 +64,35 @@ def ensure_admin_gate_configured(settings: Settings) -> None:
     still ship an empty value. Cloud Run always sets `K_SERVICE`, so treat its
     presence as "an IAM-aware edge is in front of us" and refuse to start with
     the gate disabled. Called once at app construction (`main.create_app`).
+
+    Issue #51 adds two more ways `/admin/*` can be legitimately safe with an
+    empty allowlist, so the guard accepts them:
+
+      - **Admin routes disabled** (`enable_admin_routes=false`): the data
+        deployment doesn't host `/admin/*` at all, so there is nothing to gate.
+      - **Launch gate active** (`admin_launch_secret` set): the public browser
+        bootstrap service intentionally has no IAM allowlist (a browser can't
+        present a JWT); `/admin/oauth/*` is instead protected by the signed
+        launch token. See `qbsvc.auth.admin_launch`.
     """
-    if os.environ.get("K_SERVICE") and not _normalize_allowlist(settings.admin_allowlist):
-        raise RuntimeError(
-            "QBSVC_ADMIN_ALLOWLIST is empty but the service is running on "
-            "Cloud Run (K_SERVICE is set). Refusing to start with the /admin/* "
-            "gate disabled — that would let any roles/run.invoker caller reach "
-            "the OAuth admin routes. Set QBSVC_ADMIN_ALLOWLIST to the operator "
-            "email(s) allowed to reach /admin/* (see deploy/oauth-setup.md)."
-        )
+    if not os.environ.get("K_SERVICE"):
+        return
+    if not settings.enable_admin_routes:
+        return
+    if _normalize_allowlist(settings.admin_allowlist):
+        return
+    if settings.admin_launch_secret:
+        return
+    raise RuntimeError(
+        "The /admin/* surface is enabled on Cloud Run (K_SERVICE is set) but "
+        "has no gate configured — neither QBSVC_ADMIN_ALLOWLIST nor "
+        "QBSVC_ADMIN_LAUNCH_SECRET is set. Refusing to start: that would let "
+        "any roles/run.invoker caller reach the OAuth admin routes. Set "
+        "QBSVC_ADMIN_ALLOWLIST (IAM-fronted data service) or "
+        "QBSVC_ADMIN_LAUNCH_SECRET (public browser bootstrap service), or set "
+        "QBSVC_ENABLE_ADMIN_ROUTES=false if this service must not host them "
+        "(see deploy/oauth-setup.md and deploy/qb-admin-setup.md)."
+    )
 
 
 class AdminGateMiddleware:

@@ -3,10 +3,12 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any, Iterator
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Request
 
 from qbsvc.api.client import QBClient
 from qbsvc.api.rate_limit import TokenBucket
+from qbsvc.auth import admin_launch
+from qbsvc.auth.admin_gate import extract_email_from_bearer
 from qbsvc.auth.oauth_state import OAuthStateStore
 from qbsvc.auth.secret_manager import SecretManagerTokenStore
 from qbsvc.auth.tokens import FileTokenStore, TokenStore
@@ -84,6 +86,58 @@ def get_oauth_state_store(
     """Process-wide state store so /admin/oauth/start and /callback
     share entries across requests."""
     return _oauth_state_store(settings.oauth_state_ttl_seconds)
+
+
+def require_launch_authorization(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Gate browser-initiated OAuth bootstrap on a valid launch token (issue #51).
+
+    Wired as a router-level dependency on the `/admin/oauth/*` router, so every
+    route there is default-deny. The OAuth callback is the sole intentional
+    exception (Intuit's browser redirect can't carry a launch token); it is
+    protected instead by the one-time CSRF `state` minted by the gated `/start`.
+
+    Resolution order:
+      1. Launch gate inactive (no `admin_launch_secret`) → allow. Preserves the
+         existing IAM/allowlist model and local dev unchanged.
+      2. Callback path → allow (see above).
+      3. Valid launch token (`X-QBSVC-Launch` header preferred, else `launch`
+         query param) → allow. This is the browser button path.
+      4. Allowlisted Cloud Run identity token → allow. Keeps the operator's
+         identity-injecting forwarder (oauth-setup.md §3) working even when the
+         launch gate is enabled on the same image.
+      5. Otherwise → 403.
+    """
+    if not settings.admin_launch_secret:
+        return
+
+    # The callback must stay reachable without a launch token.
+    if request.url.path.rstrip("/").endswith("/oauth/callback"):
+        return
+
+    # Prefer the header (not captured in access logs) and fall back to the query
+    # param, which a plain browser navigation (the button link) must use.
+    token = request.headers.get("x-qbsvc-launch") or request.query_params.get("launch")
+    if admin_launch.verify_launch_token(token, settings.admin_launch_secret):
+        return
+
+    allowlist = {
+        e.strip().lower() for e in settings.admin_allowlist if e and e.strip()
+    }
+    if allowlist:
+        email = extract_email_from_bearer(request.headers.get("authorization"))
+        if email and email in allowlist:
+            return
+
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "A valid launch token is required to start the QuickBooks connect "
+            "flow. Open it from the Connect QuickBooks button in your app."
+        ),
+    )
 
 
 def get_token_store(settings: Settings = Depends(get_settings)) -> TokenStore:
