@@ -38,16 +38,7 @@ set -euo pipefail
 GCP_PROJECT="${GCP_PROJECT:?GCP_PROJECT is required}"
 REALM_ID="${REALM_ID:?REALM_ID is required}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-qb-service}"
-AR_REPO="${AR_REPO:-qb-service}"
-RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
 INTUIT_ENV="${INTUIT_ENV:-production}"
-# Secret Manager secret names — parameterized so sandbox can use its own
-# Intuit dev-app keys and its own tokens blob without stepping on prod's.
-# Defaults preserve the original single-env behavior.
-SECRET_CLIENT_ID="${SECRET_CLIENT_ID:-mwl-qb-client-id}"
-SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:-mwl-qb-client-secret}"
-SECRET_TOKENS="${SECRET_TOKENS:-mwl-qb-tokens}"
 
 # Fail before the build/deploy cycle on a bad value — Settings would reject
 # it at container start (pattern ^(production|sandbox)$) after minutes of
@@ -56,6 +47,22 @@ if [[ ! "${INTUIT_ENV}" =~ ^(production|sandbox)$ ]]; then
   echo "ERROR: INTUIT_ENV must be 'production' or 'sandbox', got: ${INTUIT_ENV}" >&2
   exit 1
 fi
+
+# Sandbox deploys to its own service so a sandbox rollout never overwrites the
+# production revision. An explicit SERVICE always overrides this default.
+if [[ "${INTUIT_ENV}" == "sandbox" ]]; then
+  SERVICE="${SERVICE:-qb-service-sandbox}"
+else
+  SERVICE="${SERVICE:-qb-service}"
+fi
+AR_REPO="${AR_REPO:-qb-service}"
+RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
+# Secret Manager secret names — parameterized so sandbox can use its own
+# Intuit dev-app keys and its own tokens blob without stepping on prod's.
+# Defaults preserve the original single-env behavior.
+SECRET_CLIENT_ID="${SECRET_CLIENT_ID:-mwl-qb-client-id}"
+SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:-mwl-qb-client-secret}"
+SECRET_TOKENS="${SECRET_TOKENS:-mwl-qb-tokens}"
 
 GIT_SHA="$(git rev-parse --short HEAD)"
 IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE}:${GIT_SHA}"

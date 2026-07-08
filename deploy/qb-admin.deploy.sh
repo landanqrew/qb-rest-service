@@ -50,21 +50,28 @@ GCP_PROJECT="${GCP_PROJECT:?GCP_PROJECT is required}"
 REALM_ID="${REALM_ID:?REALM_ID is required}"
 RETURN_URL="${RETURN_URL:?RETURN_URL is required (consuming app URL to return to after connect)}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-qb-admin}"
+INTUIT_ENV="${INTUIT_ENV:-production}"
+
+if [[ ! "${INTUIT_ENV}" =~ ^(production|sandbox)$ ]]; then
+  echo "ERROR: INTUIT_ENV must be 'production' or 'sandbox', got: ${INTUIT_ENV}" >&2
+  exit 1
+fi
+
+# Sandbox deploys to its own service so a sandbox rollout never overwrites the
+# production revision. An explicit SERVICE always overrides this default.
+if [[ "${INTUIT_ENV}" == "sandbox" ]]; then
+  SERVICE="${SERVICE:-qb-admin-sandbox}"
+else
+  SERVICE="${SERVICE:-qb-admin}"
+fi
 AR_REPO="${AR_REPO:-qb-service}"
 RUNTIME_SA="${RUNTIME_SA:-qb-admin-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
-INTUIT_ENV="${INTUIT_ENV:-production}"
 # Secret Manager secret names — parameterized so sandbox can point at its own
 # Intuit dev-app keys / tokens blob / launch secret without stepping on prod.
 SECRET_CLIENT_ID="${SECRET_CLIENT_ID:-mwl-qb-client-id}"
 SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:-mwl-qb-client-secret}"
 SECRET_TOKENS="${SECRET_TOKENS:-mwl-qb-tokens}"
 SECRET_ADMIN_LAUNCH="${SECRET_ADMIN_LAUNCH:-mwl-qb-admin-launch}"
-
-if [[ ! "${INTUIT_ENV}" =~ ^(production|sandbox)$ ]]; then
-  echo "ERROR: INTUIT_ENV must be 'production' or 'sandbox', got: ${INTUIT_ENV}" >&2
-  exit 1
-fi
 
 GIT_SHA="$(git rev-parse --short HEAD)"
 IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/qb-service:${GIT_SHA}"

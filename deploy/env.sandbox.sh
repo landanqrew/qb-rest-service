@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Shared sandbox env for both Cloud Run services. Source before either deploy
-# script; sandbox uses distinct service names so both env deploys can coexist:
+# script:
 #
-#     source deploy/env.sandbox.sh && SERVICE=qb-service-sandbox deploy/deploy.sh
-#     source deploy/env.sandbox.sh && SERVICE=qb-admin-sandbox   deploy/qb-admin.deploy.sh
+#     source deploy/env.sandbox.sh && deploy/deploy.sh          # -> qb-service-sandbox
+#     source deploy/env.sandbox.sh && deploy/qb-admin.deploy.sh # -> qb-admin-sandbox
 #
-# SERVICE is set inline (not exported here) because the two deploy scripts
-# want different names and we don't want the same env file to force one.
+# With INTUIT_ENV=sandbox each deploy script defaults SERVICE to its own
+# sandbox name, so a sandbox rollout never overwrites the prod service. An
+# explicit SERVICE=... still overrides.
 
 export GCP_PROJECT=martin-water-labs
 export INTUIT_ENV=sandbox
