@@ -42,6 +42,12 @@ SERVICE="${SERVICE:-qb-service}"
 AR_REPO="${AR_REPO:-qb-service}"
 RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
 INTUIT_ENV="${INTUIT_ENV:-production}"
+# Secret Manager secret names — parameterized so sandbox can use its own
+# Intuit dev-app keys and its own tokens blob without stepping on prod's.
+# Defaults preserve the original single-env behavior.
+SECRET_CLIENT_ID="${SECRET_CLIENT_ID:-mwl-qb-client-id}"
+SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:-mwl-qb-client-secret}"
+SECRET_TOKENS="${SECRET_TOKENS:-mwl-qb-tokens}"
 
 # Fail before the build/deploy cycle on a bad value — Settings would reject
 # it at container start (pattern ^(production|sandbox)$) after minutes of
@@ -84,8 +90,8 @@ DEPLOY_ARGS=(
   # IAM-locked service (issue #52). No QBSVC_ADMIN_ALLOWLIST or
   # QBSVC_OAUTH_REDIRECT_URI here — those are admin-surface concerns owned by
   # qb-admin. `^|^` sets `|` as the delimiter so values can contain commas.
-  "--set-env-vars=^|^QBSVC_ENABLE_ADMIN_ROUTES=false|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
-  --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest"
+  "--set-env-vars=^|^QBSVC_ENABLE_ADMIN_ROUTES=false|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=${SECRET_TOKENS}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
+  --set-secrets="QBSVC_INTUIT_CLIENT_ID=${SECRET_CLIENT_ID}:latest,QBSVC_INTUIT_CLIENT_SECRET=${SECRET_CLIENT_SECRET}:latest"
 )
 
 echo "==> Deploying ${SERVICE} (IAM-locked data API; admin OAuth routes OFF)"

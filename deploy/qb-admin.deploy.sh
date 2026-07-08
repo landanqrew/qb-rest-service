@@ -54,6 +54,12 @@ SERVICE="${SERVICE:-qb-admin}"
 AR_REPO="${AR_REPO:-qb-service}"
 RUNTIME_SA="${RUNTIME_SA:-qb-admin-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
 INTUIT_ENV="${INTUIT_ENV:-production}"
+# Secret Manager secret names — parameterized so sandbox can point at its own
+# Intuit dev-app keys / tokens blob / launch secret without stepping on prod.
+SECRET_CLIENT_ID="${SECRET_CLIENT_ID:-mwl-qb-client-id}"
+SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:-mwl-qb-client-secret}"
+SECRET_TOKENS="${SECRET_TOKENS:-mwl-qb-tokens}"
+SECRET_ADMIN_LAUNCH="${SECRET_ADMIN_LAUNCH:-mwl-qb-admin-launch}"
 
 if [[ ! "${INTUIT_ENV}" =~ ^(production|sandbox)$ ]]; then
   echo "ERROR: INTUIT_ENV must be 'production' or 'sandbox', got: ${INTUIT_ENV}" >&2
@@ -79,7 +85,7 @@ EXISTING_URL="$(gcloud run services describe "${SERVICE}" \
 
 # Data routes OFF: this public surface hosts admin OAuth bootstrap only.
 # `^|^` sets `|` as the delimiter so URL values containing commas pass through.
-ENV_PAIRS="^|^QBSVC_ENABLE_DATA_ROUTES=false|QBSVC_ENABLE_ADMIN_ROUTES=true|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_ADMIN_RETURN_URL=${RETURN_URL}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
+ENV_PAIRS="^|^QBSVC_ENABLE_DATA_ROUTES=false|QBSVC_ENABLE_ADMIN_ROUTES=true|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=${SECRET_TOKENS}|QBSVC_ADMIN_RETURN_URL=${RETURN_URL}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
 
 if [[ -n "${EXISTING_URL}" ]]; then
   echo "==> Reusing existing service URL: ${EXISTING_URL}"
@@ -108,7 +114,7 @@ DEPLOY_ARGS=(
   --port=8080
   --execution-environment=gen2
   "--set-env-vars=${ENV_PAIRS}"
-  --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest,QBSVC_ADMIN_LAUNCH_SECRET=mwl-qb-admin-launch:latest"
+  --set-secrets="QBSVC_INTUIT_CLIENT_ID=${SECRET_CLIENT_ID}:latest,QBSVC_INTUIT_CLIENT_SECRET=${SECRET_CLIENT_SECRET}:latest,QBSVC_ADMIN_LAUNCH_SECRET=${SECRET_ADMIN_LAUNCH}:latest"
 )
 
 echo "==> Deploying ${SERVICE} (PUBLIC, admin OAuth bootstrap only)"
