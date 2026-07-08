@@ -11,10 +11,8 @@
 export GCP_PROJECT=martin-water-labs
 export INTUIT_ENV=sandbox
 
-# TODO(landan): verify sandbox realmId. Both .env files currently show the
-# same value as prod — Intuit issues a distinct realmId per sandbox company
-# (visible on the OAuth Playground page next to Company ID, or in the URL
-# when logged into sandbox.qbo.intuit.com).
+# Same realmId as prod — only the Intuit app's client_id/secret differ
+# between sandbox and production.
 export REALM_ID=9130352324794416
 
 # Sandbox-specific Secret Manager secrets. These do NOT exist in
