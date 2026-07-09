@@ -29,4 +29,6 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "src" for the qbsvc package; "." so the out-of-band scripts/replicate tool
+# (not part of the shipped package) is importable by its tests.
+pythonpath = ["src", "."]

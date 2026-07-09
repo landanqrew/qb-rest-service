@@ -1,0 +1,724 @@
+<title>qb-service — Codebase Readout</title>
+<style>
+  :root {
+    --bg: #f7f6f3;
+    --bg-raised: #ffffff;
+    --bg-sunken: #efeee9;
+    --ink: #16181d;
+    --ink-soft: #4a4f57;
+    --ink-faint: #7b818b;
+    --line: #e2e0d9;
+    --line-strong: #cfccc2;
+    --accent: #1f8a12;
+    --accent-soft: #e7f2e3;
+    --accent-ink: #146b0a;
+    --amber: #a86a00;
+    --amber-soft: #f6ecd6;
+    --clay: #b03f31;
+    --clay-soft: #f6e2de;
+    --slate: #4f6072;
+    --slate-soft: #e6ebef;
+    --mono: "SF Mono", "JetBrains Mono", "Menlo", "Andale Mono", ui-monospace, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --maxw: 940px;
+    --rail: 244px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --bg-raised: #171a20;
+      --bg-sunken: #0a0c0f;
+      --ink: #eceef2;
+      --ink-soft: #b0b6bf;
+      --ink-faint: #7e858f;
+      --line: #262b33;
+      --line-strong: #333a44;
+      --accent: #4cc23a;
+      --accent-soft: #16241355;
+      --accent-ink: #7fdf6f;
+      --amber: #e0a83a;
+      --amber-soft: #2b210f66;
+      --clay: #e07a68;
+      --clay-soft: #2c1a1666;
+      --slate: #9db0c2;
+      --slate-soft: #1a222b66;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f7f6f3; --bg-raised: #ffffff; --bg-sunken: #efeee9;
+    --ink: #16181d; --ink-soft: #4a4f57; --ink-faint: #7b818b;
+    --line: #e2e0d9; --line-strong: #cfccc2;
+    --accent: #1f8a12; --accent-soft: #e7f2e3; --accent-ink: #146b0a;
+    --amber: #a86a00; --amber-soft: #f6ecd6;
+    --clay: #b03f31; --clay-soft: #f6e2de;
+    --slate: #4f6072; --slate-soft: #e6ebef;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --bg-raised: #171a20; --bg-sunken: #0a0c0f;
+    --ink: #eceef2; --ink-soft: #b0b6bf; --ink-faint: #7e858f;
+    --line: #262b33; --line-strong: #333a44;
+    --accent: #4cc23a; --accent-soft: #16241355; --accent-ink: #7fdf6f;
+    --amber: #e0a83a; --amber-soft: #2b210f66;
+    --clay: #e07a68; --clay-soft: #2c1a1666;
+    --slate: #9db0c2; --slate-soft: #1a222b66;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    gap: 0;
+    max-width: calc(var(--maxw) + var(--rail));
+    margin: 0 auto;
+  }
+
+  /* ---- Rail ---- */
+  nav.rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 32px 20px 40px 24px;
+    border-right: 1px solid var(--line);
+  }
+  .rail .brand {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .rail .brand .dot { color: var(--accent); }
+  .rail .tag {
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    margin: 4px 0 24px;
+    line-height: 1.4;
+  }
+  .rail ol { list-style: none; margin: 0; padding: 0; counter-reset: nav; }
+  .rail li { margin: 1px 0; }
+  .rail a {
+    display: flex;
+    gap: 9px;
+    align-items: baseline;
+    text-decoration: none;
+    color: var(--ink-soft);
+    font-size: 13.5px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    line-height: 1.3;
+  }
+  .rail a:hover { background: var(--bg-sunken); color: var(--ink); }
+  .rail a .num {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    min-width: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---- Main ---- */
+  main { padding: 48px 40px 120px; min-width: 0; }
+
+  header.hero { margin-bottom: 44px; }
+  .hero .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin-bottom: 14px;
+  }
+  .hero h1 {
+    font-size: clamp(30px, 5vw, 44px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+    font-weight: 700;
+  }
+  .hero .lede {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .hero .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 8px;
+    margin-top: 22px;
+  }
+  .fact {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+  }
+  .fact b { color: var(--ink); font-weight: 600; }
+
+  section { margin-bottom: 52px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 13px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  h2 .h2num {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 12px;
+  }
+  .section-head { margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .section-head p { margin: 8px 0 0; color: var(--ink-soft); font-size: 15px; max-width: 66ch; }
+  h3 { font-size: 17px; margin: 0 0 8px; letter-spacing: -0.01em; }
+
+  p { max-width: 68ch; }
+  code, .mono { font-family: var(--mono); font-size: 0.88em; }
+  p code, li code, td code {
+    background: var(--bg-sunken);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--ink);
+    border: 1px solid var(--line);
+  }
+  a.inline { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid var(--line-strong); }
+  a.inline:hover { border-color: var(--accent); }
+
+  /* ---- Flow diagram ---- */
+  .flow {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    overflow-x: auto;
+  }
+  .flow .node {
+    flex: 1 1 130px;
+    min-width: 120px;
+    text-align: center;
+    padding: 12px 10px;
+  }
+  .flow .node .ico {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .flow .node .name { font-weight: 650; font-size: 15px; margin: 6px 0 3px; }
+  .flow .node .sub { font-size: 12.5px; color: var(--ink-soft); line-height: 1.35; }
+  .flow .arrow {
+    align-self: center;
+    color: var(--accent);
+    font-size: 20px;
+    padding: 0 4px;
+    flex: 0 0 auto;
+  }
+  .flow .node.qbo .name { color: var(--accent-ink); }
+
+  /* ---- Route tables ---- */
+  .routes { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg-raised); }
+  .route-group + .route-group { border-top: 1px solid var(--line); }
+  .route-group > .rg-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 13px 18px;
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--line);
+  }
+  .rg-head .rg-title { font-weight: 650; font-size: 14.5px; }
+  .rg-head .rg-file { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); }
+  table.rt { width: 100%; border-collapse: collapse; }
+  table.rt td { padding: 9px 18px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13.5px; }
+  table.rt tr:last-child td { border-bottom: none; }
+  table.rt td.verb { width: 74px; white-space: nowrap; }
+  table.rt td.path { font-family: var(--mono); font-size: 12.5px; color: var(--ink); width: 42%; }
+  table.rt td.desc { color: var(--ink-soft); }
+  .verb-pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 2px 7px;
+    border-radius: 5px;
+    line-height: 1.4;
+  }
+  .v-get  { background: var(--slate-soft); color: var(--slate); }
+  .v-post { background: var(--accent-soft); color: var(--accent-ink); }
+  .v-put  { background: var(--amber-soft); color: var(--amber); }
+  .v-del  { background: var(--clay-soft); color: var(--clay); }
+
+  /* ---- Module cards ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 16px 15px;
+  }
+  .card .pkg {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin-bottom: 10px;
+  }
+  .card ul { list-style: none; margin: 0; padding: 0; }
+  .card li { padding: 6px 0; border-top: 1px dashed var(--line); display: grid; gap: 2px; }
+  .card li:first-child { border-top: none; padding-top: 0; }
+  .card li .fn { font-family: var(--mono); font-size: 12px; color: var(--ink); font-weight: 600; }
+  .card li .fd { font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
+
+  /* ---- Callouts ---- */
+  .note {
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 14px;
+    border: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 12px;
+    align-items: start;
+  }
+  .note + .note { margin-top: 10px; }
+  .note .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 5px;
+    white-space: nowrap;
+    line-height: 1.5;
+    margin-top: 1px;
+  }
+  .note p { margin: 0; max-width: none; color: var(--ink-soft); }
+  .note p b { color: var(--ink); }
+  .note.warn { background: var(--amber-soft); border-color: transparent; }
+  .note.warn .badge { background: var(--amber); color: #fff; }
+  .note.gotcha { background: var(--clay-soft); border-color: transparent; }
+  .note.gotcha .badge { background: var(--clay); color: #fff; }
+  .note.good { background: var(--accent-soft); border-color: transparent; }
+  .note.good .badge { background: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) {
+    .note.warn .badge, .note.gotcha .badge, .note.good .badge { color: #0f1115; }
+  }
+  :root[data-theme="dark"] .note.warn .badge,
+  :root[data-theme="dark"] .note.gotcha .badge,
+  :root[data-theme="dark"] .note.good .badge { color: #0f1115; }
+
+  /* ---- Config table ---- */
+  table.cfg { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.cfg th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--ink-faint); font-weight: 600; padding: 0 14px 8px; border-bottom: 1px solid var(--line-strong);
+  }
+  table.cfg td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cfg td.k { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: nowrap; }
+  table.cfg td.v { color: var(--ink-soft); }
+  table.cfg td.d { font-family: var(--mono); font-size: 12px; color: var(--accent-ink); white-space: nowrap; }
+  .tbl-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-raised); padding: 14px 4px 4px; }
+
+  /* ---- Plug-in guide (the actual job) ---- */
+  .steps { counter-reset: step; display: grid; gap: 12px; }
+  .step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 16px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 10px;
+    padding: 15px 18px;
+  }
+  .step .n {
+    counter-increment: step;
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+  .step .n::before { content: counter(step, decimal-leading-zero); }
+  .step h4 { margin: 0 0 4px; font-size: 15px; }
+  .step p { margin: 0; font-size: 13.5px; color: var(--ink-soft); max-width: none; }
+
+  .phase-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .phase {
+    font-size: 12px; padding: 5px 11px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg-raised); color: var(--ink-soft);
+    font-family: var(--mono);
+  }
+  .phase.done { background: var(--accent-soft); border-color: transparent; color: var(--accent-ink); }
+  .phase.done::before { content: "✓ "; }
+
+  footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-faint); }
+  footer code { font-size: 12px; }
+
+  @media (max-width: 820px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.rail { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    .rail ol { columns: 2; }
+    main { padding: 32px 22px 80px; }
+  }
+</style>
+
+<div class="layout">
+  <nav class="rail">
+    <div class="brand">qb-service<span class="dot">.</span></div>
+    <div class="tag">Stateless FastAPI proxy in front of QuickBooks Online. Codebase readout for feature planning.</div>
+    <ol>
+      <li><a href="#overview"><span class="num">00</span> What it is</a></li>
+      <li><a href="#request"><span class="num">01</span> Request lifecycle</a></li>
+      <li><a href="#routes"><span class="num">02</span> HTTP surface</a></li>
+      <li><a href="#modules"><span class="num">03</span> Module map</a></li>
+      <li><a href="#auth"><span class="num">04</span> Auth &amp; tokens</a></li>
+      <li><a href="#config"><span class="num">05</span> Config surface</a></li>
+      <li><a href="#tests"><span class="num">06</span> Tests &amp; deploy</a></li>
+      <li><a href="#plugin"><span class="num">07</span> Adding a feature</a></li>
+      <li><a href="#watch"><span class="num">08</span> What to watch for</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">Codebase Readout · single realm · Python 3.13</div>
+      <h1>A thin, stateless door between the Lab&nbsp;Intake app and QuickBooks Online.</h1>
+      <p class="lede">Every request hits QBO live — the service owns Intuit OAuth, token rotation, rate-limit handling, and QBO's request/response quirks, and holds <b>no business data of its own</b>. One image, deployed as three Cloud Run services.</p>
+      <div class="facts">
+        <span class="fact"><b>FastAPI</b> · synchronous</span>
+        <span class="fact"><b>19</b> routes</span>
+        <span class="fact"><b>3</b> resources: customers · items · invoices</span>
+        <span class="fact">token store: <b>Secret Manager</b> / file</span>
+        <span class="fact">deploy: <b>Cloud Run</b> ×3</span>
+      </div>
+    </header>
+
+    <section id="overview">
+      <div class="section-head">
+        <h2><span class="h2num">00</span> What it is</h2>
+        <p>Forked from <code>quickbooks-cli</code>. The design contract (<a class="inline" href="#">docs/qb-service-scope.md</a>) is deliberately narrow: no business logic, no database, no caching, one QBO realm. It exists so the web app never sees an Intuit token or the client secret.</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <div class="pkg">Owns</div>
+          <ul>
+            <li><span class="fd">Intuit OAuth 2.0 handshake &amp; browser bootstrap</span></li>
+            <li><span class="fd">Refresh-token rotation → Secret Manager versions</span></li>
+            <li><span class="fd">Rate limiting (local token bucket + 429 retry)</span></li>
+            <li><span class="fd">QBO fault-code → HTTP status translation</span></li>
+            <li><span class="fd">A stable, versioned <code>/v1</code> REST surface</span></li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="pkg">Explicitly not</div>
+          <ul>
+            <li><span class="fd">No invoice numbering / test-code mapping — web app's job</span></li>
+            <li><span class="fd">No database, no cache — every read hits QBO</span></li>
+            <li><span class="fd">No CLI features (payments, estimates, P&amp;L)</span></li>
+            <li><span class="fd">No webhooks, no multi-tenant shape</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="request">
+      <div class="section-head">
+        <h2><span class="h2num">01</span> Request lifecycle</h2>
+        <p>A request threads through two middleware layers, a rate-limit gate, and token management before a single outbound QBO call. Sync handlers run in FastAPI's threadpool — one inbound request maps to one outbound call.</p>
+      </div>
+      <div class="flow">
+        <div class="node"><div class="ico">caller</div><div class="name">Web app</div><div class="sub">Google ID token (Cloud Run IAM)</div></div>
+        <div class="arrow">→</div>
+        <div class="node"><div class="ico">middleware</div><div class="name">Admin gate + RequestID</div><div class="sub">allowlist on <code>/admin/*</code>; binds <code>X-Request-ID</code></div></div>
+        <div class="arrow">→</div>
+        <div class="node"><div class="ico">route</div><div class="name">Handler</div><div class="sub">delegates to shared <code>_common</code> helpers</div></div>
+        <div class="arrow">→</div>
+        <div class="node"><div class="ico">client</div><div class="name">QBClient</div><div class="sub">bucket → ensure token → call → retry</div></div>
+        <div class="arrow">→</div>
+        <div class="node qbo"><div class="ico">upstream</div><div class="name">QuickBooks</div><div class="sub"><code>minorversion=75</code>, one realm</div></div>
+      </div>
+      <div class="note good" style="margin-top:14px;">
+        <span class="badge">retry logic</span>
+        <p><b>401</b> → refresh token, swap bearer, retry once. <b>429</b> → sleep <code>Retry-After</code> (default 5s), retry once; a second 429 raises <code>RateLimitError</code>. The local token bucket fails fast at ~480/min <i>before</i> hitting Intuit's 500/min ceiling.</p>
+      </div>
+    </section>
+
+    <section id="routes">
+      <div class="section-head">
+        <h2><span class="h2num">02</span> HTTP surface</h2>
+        <p>Data routes are versioned under <code>/v1</code> and toggled by <code>ENABLE_DATA_ROUTES</code>. Admin OAuth routes are unversioned (the callback path is registered byte-for-byte in the Intuit console) and toggled by <code>ENABLE_ADMIN_ROUTES</code>. Writes are read-then-write against QBO's <code>SyncToken</code> optimistic concurrency.</p>
+      </div>
+      <div class="routes">
+        <div class="route-group">
+          <div class="rg-head"><span class="rg-title">Health</span><span class="rg-file">routes/health.py</span></div>
+          <table class="rt">
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/healthz</td><td class="desc">Liveness — no QBO call. (Google intercepts this on <code>run.app</code>; use <code>/readyz</code> remotely.)</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/readyz</td><td class="desc">Readiness — exercises the token/auth path via <code>client.ensure_ready()</code>.</td></tr>
+          </table>
+        </div>
+        <div class="route-group">
+          <div class="rg-head"><span class="rg-title">Admin OAuth <span style="font-weight:400;color:var(--ink-faint)">· launch-gated</span></span><span class="rg-file">routes/admin_oauth.py</span></div>
+          <table class="rt">
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/admin/oauth/start</td><td class="desc">Mint CSRF state, 302 to Intuit consent.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/admin/oauth/callback</td><td class="desc">Exchange code, persist rotated tokens. (Exempt from launch gate.)</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/admin/oauth/disconnect</td><td class="desc">Confirmation page.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-post">POST</span></td><td class="path">/admin/oauth/disconnect</td><td class="desc">Revoke at Intuit, then clear the store (under refresh lock).</td></tr>
+          </table>
+        </div>
+        <div class="route-group">
+          <div class="rg-head"><span class="rg-title">Customers <span style="font-weight:400;color:var(--ink-faint)">· read-only</span></span><span class="rg-file">routes/customers.py</span></div>
+          <table class="rt">
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/v1/customers</td><td class="desc">List. Query: <code>active</code>, <code>modified_since</code>, <code>limit</code>, <code>cursor</code>.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/v1/customers/{id}</td><td class="desc">Single customer.</td></tr>
+          </table>
+        </div>
+        <div class="route-group">
+          <div class="rg-head"><span class="rg-title">Items <span style="font-weight:400;color:var(--ink-faint)">· full CRUD</span></span><span class="rg-file">routes/items.py</span></div>
+          <table class="rt">
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/v1/items</td><td class="desc">List items/products.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/v1/items/{id}</td><td class="desc">Single item.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-post">POST</span></td><td class="path">/v1/items</td><td class="desc">Create item.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-put">PUT</span></td><td class="path">/v1/items/{id}</td><td class="desc">Sparse update, SyncToken-aware.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-del">DEL</span></td><td class="path">/v1/items/{id}</td><td class="desc">Deactivate (<code>Active:false</code>) — QBO can't hard-delete items.</td></tr>
+          </table>
+        </div>
+        <div class="route-group">
+          <div class="rg-head"><span class="rg-title">Invoices <span style="font-weight:400;color:var(--ink-faint)">· full CRUD + lines</span></span><span class="rg-file">routes/invoices.py</span></div>
+          <table class="rt">
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/v1/invoices</td><td class="desc">List. Query: <code>customer_id</code>, <code>doc_number</code>, <code>modified_since</code>…</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-get">GET</span></td><td class="path">/v1/invoices/{id}</td><td class="desc">Single invoice.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-post">POST</span></td><td class="path">/v1/invoices</td><td class="desc">Create. Duplicate <code>DocNumber</code> → 409.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-put">PUT</span></td><td class="path">/v1/invoices/{id}</td><td class="desc">Full replace, SyncToken-aware.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-del">DEL</span></td><td class="path">/v1/invoices/{id}</td><td class="desc">Hard delete (QBO <code>operation=delete</code>).</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-post">POST</span></td><td class="path">/v1/invoices/{id}/void</td><td class="desc">Void — record survives at $0.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-post">POST</span></td><td class="path">/v1/invoices/{id}/lines</td><td class="desc">Append a line (read-modify-write).</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-put">PUT</span></td><td class="path">/v1/invoices/{id}/lines/{line_id}</td><td class="desc">Update one line — full-invoice RMW.</td></tr>
+            <tr><td class="verb"><span class="verb-pill v-del">DEL</span></td><td class="path">/v1/invoices/{id}/lines/{line_id}</td><td class="desc">Remove one line — same mechanics.</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="modules">
+      <div class="section-head">
+        <h2><span class="h2num">03</span> Module map</h2>
+        <p>Src layout under <code>src/qbsvc/</code>. Three packages plus a set of cross-cutting top-level modules. This is where you'll add code.</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <div class="pkg">qbsvc/ · top-level</div>
+          <ul>
+            <li><span class="fn">main.py</span><span class="fd">App factory <code>create_app()</code>; wires middleware, handlers, conditional routers.</span></li>
+            <li><span class="fn">config.py</span><span class="fd">Pydantic settings, env prefix <code>QBSVC_</code>; cached <code>get_settings()</code>.</span></li>
+            <li><span class="fn">deps.py</span><span class="fd">FastAPI providers + memoized singletons (client, stores, gate).</span></li>
+            <li><span class="fn">errors.py</span><span class="fd"><code>envelope()</code> + maps every exception to the JSON shape.</span></li>
+            <li><span class="fn">exceptions.py</span><span class="fd">Domain hierarchy: <code>QBError</code>, <code>AuthError</code>, <code>APIError</code>, <code>RateLimitError</code>…</span></li>
+            <li><span class="fn">schemas.py</span><span class="fd">Pydantic response models (<code>ListResponse</code>, <code>DetailResponse</code>…).</span></li>
+            <li><span class="fn">middleware.py</span><span class="fd">Pure-ASGI <code>RequestIDMiddleware</code>; access log + envelope catch.</span></li>
+            <li><span class="fn">logging.py · request_context.py</span><span class="fd">JSON logs; ContextVars for <code>request_id</code> / <code>intuit_tid</code>.</span></li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="pkg">qbsvc/api/</div>
+          <ul>
+            <li><span class="fn">client.py</span><span class="fd"><code>QBClient</code> — the sync QBO client: auth, refresh-on-401, rate limit, 429 retry, fault mapping.</span></li>
+            <li><span class="fn">rate_limit.py</span><span class="fd"><code>TokenBucket</code> — process-local, injectable clock.</span></li>
+            <li><span class="fn">pagination.py</span><span class="fd"><code>paginate()</code> over STARTPOSITION/MAXRESULTS.</span></li>
+            <li><span class="fn">queries.py</span><span class="fd"><code>build_query()</code> — QBO SQL-like builder.</span></li>
+            <li><span class="fn">cursors.py</span><span class="fd">Opaque base64url cursor ↔ offset.</span></li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="pkg">qbsvc/auth/</div>
+          <ul>
+            <li><span class="fn">oauth.py</span><span class="fd">authorize URL, code exchange, refresh, revoke.</span></li>
+            <li><span class="fn">tokens.py</span><span class="fd"><code>TokenData</code>, <code>TokenStore</code> protocol, <code>FileTokenStore</code>.</span></li>
+            <li><span class="fn">secret_manager.py</span><span class="fd"><code>SecretManagerTokenStore</code> — new version per save.</span></li>
+            <li><span class="fn">discovery.py</span><span class="fd">Intuit OIDC discovery fetch/cache (24h TTL).</span></li>
+            <li><span class="fn">oauth_state.py · admin_gate.py · admin_launch.py</span><span class="fd">CSRF state store; email-allowlist gate; HMAC launch tokens.</span></li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="pkg">qbsvc/routes/</div>
+          <ul>
+            <li><span class="fn">_common.py</span><span class="fd">Shared <code>list_entity</code> / <code>get_entity_detail</code> / error mapping / cursor paging. <b>Start here.</b></span></li>
+            <li><span class="fn">health.py</span><span class="fd">Liveness + readiness.</span></li>
+            <li><span class="fn">customers.py · items.py · invoices.py</span><span class="fd">One module per resource — your new resource follows this shape.</span></li>
+            <li><span class="fn">admin_oauth.py</span><span class="fd">Browser OAuth flow.</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="auth">
+      <div class="section-head">
+        <h2><span class="h2num">04</span> Auth &amp; token model</h2>
+        <p>Two independent concerns: who may call the service (Cloud Run IAM + admin gate), and how the service talks to QBO (OAuth with rotating refresh tokens).</p>
+      </div>
+      <div class="cards" style="grid-template-columns:1fr 1fr;">
+        <div class="card">
+          <h3>Caller → service</h3>
+          <p style="font-size:13.5px;color:var(--ink-soft);margin:0 0 10px;max-width:none;">Cloud Run runs <code>--no-allow-unauthenticated</code>; GCP verifies the Google ID token at the edge before code runs.</p>
+          <ul style="list-style:none;padding:0;margin:0;">
+            <li style="padding:5px 0;font-size:13px;color:var(--ink-soft);"><b style="color:var(--ink)">AdminGateMiddleware</b> — email-allowlist on <code>/admin/*</code>.</li>
+            <li style="padding:5px 0;font-size:13px;color:var(--ink-soft);"><b style="color:var(--ink)">require_launch_authorization</b> — HMAC launch token so a browser button can start OAuth without an identity token.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Service → QBO</h3>
+          <p style="font-size:13.5px;color:var(--ink-soft);margin:0 0 10px;max-width:none;">Access token cached in-memory; refreshed when expired (60s buffer). Store is pluggable via <code>TokenStore</code>.</p>
+          <ul style="list-style:none;padding:0;margin:0;">
+            <li style="padding:5px 0;font-size:13px;color:var(--ink-soft);"><b style="color:var(--ink)">FileTokenStore</b> — dev, JSON on disk, mode 600.</li>
+            <li style="padding:5px 0;font-size:13px;color:var(--ink-soft);"><b style="color:var(--ink)">SecretManagerTokenStore</b> — prod, new secret version per save, tombstone on clear.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="note gotcha" style="margin-top:14px;">
+        <span class="badge">critical</span>
+        <p><b>Refresh tokens rotate on every refresh.</b> The new value <i>must</i> be persisted or the next cold start dies. A process-wide <code>refresh_lock</code> serializes refreshes (double-checked re-read under lock) so two threads can't invalidate each other's rotated token. A failed <code>save()</code> raises loudly — Intuit has already rotated by then.</p>
+      </div>
+    </section>
+
+    <section id="config">
+      <div class="section-head">
+        <h2><span class="h2num">05</span> Config surface</h2>
+        <p>All env vars are prefixed <code>QBSVC_</code> and read once via <code>@lru_cache get_settings()</code>. Tests disable <code>.env</code> loading for hermeticity.</p>
+      </div>
+      <div class="tbl-scroll">
+        <table class="cfg">
+          <thead><tr><th>Variable</th><th>Purpose</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td class="k">INTUIT_CLIENT_ID / _SECRET</td><td class="v">OAuth app credentials</td><td class="d">—</td></tr>
+            <tr><td class="k">INTUIT_ENVIRONMENT</td><td class="v">production | sandbox</td><td class="d">—</td></tr>
+            <tr><td class="k">REALM_ID</td><td class="v">The single QBO company</td><td class="d">—</td></tr>
+            <tr><td class="k">TOKEN_BACKEND</td><td class="v">file | secret_manager</td><td class="d">file</td></tr>
+            <tr><td class="k">GCP_PROJECT / SECRET_NAME_*</td><td class="v">Secret Manager wiring</td><td class="d">mwl-qb-…</td></tr>
+            <tr><td class="k">OAUTH_REDIRECT_URI</td><td class="v">Callback URL (matches Intuit console)</td><td class="d">—</td></tr>
+            <tr><td class="k">ENABLE_DATA_ROUTES</td><td class="v">Mount <code>/v1/*</code></td><td class="d">true</td></tr>
+            <tr><td class="k">ENABLE_ADMIN_ROUTES</td><td class="v">Mount <code>/admin/oauth/*</code></td><td class="d">true</td></tr>
+            <tr><td class="k">ADMIN_ALLOWLIST</td><td class="v">Comma-separated admin emails</td><td class="d">— (off)</td></tr>
+            <tr><td class="k">ADMIN_LAUNCH_SECRET / _TTL</td><td class="v">HMAC launch token signing</td><td class="d">300s</td></tr>
+            <tr><td class="k">RATE_LIMIT_PER_MIN / _BURST</td><td class="v">Local token bucket</td><td class="d">480 / 16</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tests">
+      <div class="section-head">
+        <h2><span class="h2num">06</span> Tests &amp; deploy</h2>
+        <p>pytest with <code>pythonpath=["src"]</code>. QBO is mocked at the transport layer — no live calls in CI.</p>
+      </div>
+      <div class="cards" style="grid-template-columns:1fr 1fr;">
+        <div class="card">
+          <div class="pkg">test layout</div>
+          <ul>
+            <li><span class="fn">tests/unit/</span><span class="fd">client, rate limit, tokens, cursors, gate, errors…</span></li>
+            <li><span class="fn">tests/integration/</span><span class="fd">Route suites per resource via FastAPI <code>TestClient</code> + <code>httpx.MockTransport</code>.</span></li>
+            <li><span class="fn">tests/e2e/ · tests/live/</span><span class="fd">Page checks; deployed-sandbox smoke (gated).</span></li>
+            <li><span class="fn">conftest.py</span><span class="fd">Autouse hermetic fixtures: offline discovery, ignored <code>.env</code>, per-suite cache clears, <code>_Recorder</code> for QBO calls.</span></li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="pkg">deploy · one image, three services</div>
+          <ul>
+            <li><span class="fn">qb-service</span><span class="fd">IAM-locked data API. Admin routes off, Secret Manager backend.</span></li>
+            <li><span class="fn">qb-admin</span><span class="fd">Public OAuth bootstrap, launch-token guarded. Shares the token secret.</span></li>
+            <li><span class="fn">qb-pages</span><span class="fd">Static nginx site (landing / EULA / privacy) for Intuit prod keys.</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="plugin">
+      <div class="section-head">
+        <h2><span class="h2num">07</span> Adding a feature — where it plugs in</h2>
+        <p>The architecture is uniform, so a new <b>read/write resource</b> (say <code>/v1/vendors</code> or <code>/v1/payments</code>) is largely mechanical. Follow the existing resource modules; the interesting decisions are QBO-shaped, not framework-shaped.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="n"></div><div><h4>Add the router module</h4><p>Create <code>routes/&lt;resource&gt;.py</code> mirroring <code>customers.py</code> (read-only) or <code>items.py</code> (CRUD). Reuse <code>_common.list_entity</code> / <code>get_entity_detail</code> for the boilerplate — cursor paging, filters, and error mapping already live there.</p></div></div>
+        <div class="step"><div class="n"></div><div><h4>Register it in the app factory</h4><p>Add <code>app.include_router(&lt;resource&gt;.router, prefix="/v1")</code> in <code>main.py</code>, inside the <code>enable_data_routes</code> block.</p></div></div>
+        <div class="step"><div class="n"></div><div><h4>Define request/response schemas</h4><p>Add Pydantic models to <code>schemas.py</code>. Scope decision #5 leans toward <code>extra="forbid"</code> on write bodies so the web app gets clear errors, not silent drops.</p></div></div>
+        <div class="step"><div class="n"></div><div><h4>Map QBO's quirks</h4><p>Check how the entity behaves in QBO: hard-delete vs. deactivate, per-line vs. read-modify-write, which fault codes it can raise. Extend the fault → HTTP mapping in <code>_common</code> only if the entity introduces a new one.</p></div></div>
+        <div class="step"><div class="n"></div><div><h4>Test at the transport layer</h4><p>Add an integration suite under <code>tests/integration/</code> using <code>MockTransport</code> and the <code>_Recorder</code> pattern — assert on the QBO request the client emits, not on live QBO.</p></div></div>
+        <div class="step"><div class="n"></div><div><h4>If it's a bigger shape</h4><p>A feature that isn't a plain CRUD resource (e.g. reports, webhooks, a second realm) crosses the scope contract. Those are called out as non-goals / open questions in the scope doc — worth a design note before building, since they touch auth, caching, or statelessness assumptions.</p></div></div>
+      </div>
+      <div style="margin-top:18px;">
+        <div style="font-family:var(--mono);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:8px;">Delivery phases — all complete through hardening</div>
+        <div class="phase-row">
+          <span class="phase done">0 Bootstrap</span>
+          <span class="phase done">1 Token plumbing</span>
+          <span class="phase done">2 Reads</span>
+          <span class="phase done">3 Writes</span>
+          <span class="phase done">3b Extended writes</span>
+          <span class="phase done">4 Hardening</span>
+          <span class="phase done">4b Prod launch</span>
+          <span class="phase">5 Web app (other repo)</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="watch">
+      <div class="section-head">
+        <h2><span class="h2num">08</span> What to watch for</h2>
+        <p>Landmines and load-bearing conventions worth knowing before you touch anything.</p>
+      </div>
+      <div class="note gotcha">
+        <span class="badge">rotation</span>
+        <p>Any code path that calls Intuit's token endpoint <b>must</b> persist the rotated refresh token, and do it under <code>refresh_lock</code>. This is the single most breakable invariant in the service.</p>
+      </div>
+      <div class="note warn">
+        <span class="badge">sync only</span>
+        <p><code>QBClient</code> is deliberately <b>synchronous</b> — sync route handlers run in FastAPI's threadpool. Don't introduce <code>async def</code> handlers that call it directly, or you'll block the event loop.</p>
+      </div>
+      <div class="note warn">
+        <span class="badge">boot guard</span>
+        <p><code>create_app()</code> refuses to boot if <code>/admin/*</code> is enabled on Cloud Run (<code>K_SERVICE</code> set) with neither an allowlist nor a launch secret. New admin routes inherit this gate.</p>
+      </div>
+      <div class="note warn">
+        <span class="badge">two pagers</span>
+        <p>There are two paging mechanisms: <code>api/pagination.py</code> (<code>paginate()</code> generator) and the route-layer cursor paging in <code>_common.list_entity</code> (fetch <code>limit+1</code>, opaque cursors). List routes use the latter — follow it for consistency.</p>
+      </div>
+      <div class="note good">
+        <span class="badge">envelope</span>
+        <p>Every response — success and error, including ASGI-level 403/500 — shares one envelope carrying <code>request_id</code> and <code>intuit_tid</code>. Keep new routes on the shared helpers so they stay in the envelope.</p>
+      </div>
+    </section>
+
+    <footer>
+      Generated from a read of <code>src/qbsvc/</code>, <code>tests/</code>, <code>deploy/</code>, and <code>docs/qb-service-scope.md</code> · single QBO realm (Martin Water Labs) · <code>minorversion=75</code> · Python 3.13 / FastAPI. This is a map for planning, not a substitute for the scope doc.
+    </footer>
+  </main>
+</div>
