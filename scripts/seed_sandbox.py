@@ -78,6 +78,7 @@ ENV_FILES = {
 # Fields that either belong to the source realm (Id, SyncToken) or are
 # populated by QBO on create (MetaData). Passing them through causes 400s.
 STRIP_FIELDS = ("Id", "SyncToken", "MetaData", "domain", "sparse")
+SUPPORTED_ITEM_TYPES = frozenset({"Service", "Inventory", "NonInventory"})
 
 # Refs on prod Customers pointing at prod-realm object ids with no sandbox
 # equivalent by id (sandbox has its own Terms / PaymentMethods / CustomerTypes).
@@ -337,6 +338,7 @@ def seed_customers(
                 payload.pop("Job", None)
 
         if dry_run:
+            customer_map[prod_id] = f"dry_run_{prod_id}"
             _log.info("dry_run customer prod_id=%s name=%s", prod_id, c.get("DisplayName"))
             continue
 
@@ -424,6 +426,15 @@ def seed_items(
             continue
 
         payload = _strip(it)
+        item_type = payload.get("Type")
+        if item_type not in SUPPORTED_ITEM_TYPES:
+            _log.info(
+                "item_skipped_unsupported_type prod_id=%s name=%s type=%s",
+                prod_id,
+                it.get("Name"),
+                item_type,
+            )
+            continue
 
         parent = payload.get("ParentRef")
         if parent:
@@ -450,6 +461,7 @@ def seed_items(
             continue
 
         if dry_run:
+            item_map[prod_id] = f"dry_run_{prod_id}"
             _log.info(
                 "dry_run item prod_id=%s name=%s type=%s",
                 prod_id,

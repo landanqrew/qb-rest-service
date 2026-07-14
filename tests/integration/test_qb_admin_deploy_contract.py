@@ -38,6 +38,13 @@ def test_deploy_script_is_public_and_data_routes_off():
     assert "QBSVC_ADMIN_ALLOWLIST=" not in text
 
 
+def test_deploy_script_uses_configurable_shared_image_name():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'IMAGE_NAME="${IMAGE_NAME:-qb-service}"' in text
+    assert '${AR_REPO}/${IMAGE_NAME}:${GIT_SHA}' in text
+    assert "${AR_REPO}/qb-service:${GIT_SHA}" not in text
+
+
 def test_deploy_yaml_is_public_shape_and_gated():
     text = YAML.read_text(encoding="utf-8")
     assert "qb-admin" in text.lower()

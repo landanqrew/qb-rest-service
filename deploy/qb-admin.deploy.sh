@@ -36,6 +36,7 @@
 #   REGION        Cloud Run region (default: us-central1)
 #   SERVICE       Service name (default: qb-admin)
 #   AR_REPO       Artifact Registry repo (default: qb-service — same image)
+#   IMAGE_NAME    Artifact Registry image name (default: qb-service)
 #   RUNTIME_SA    Runtime SA (default: qb-admin-runtime@${GCP_PROJECT}.iam.gserviceaccount.com)
 #   INTUIT_ENV    "production" or "sandbox" (default: production)
 #
@@ -81,6 +82,7 @@ else
   SERVICE="${SERVICE:-qb-admin}"
 fi
 AR_REPO="${AR_REPO:-qb-service}"
+IMAGE_NAME="${IMAGE_NAME:-qb-service}"
 RUNTIME_SA="${RUNTIME_SA:-qb-admin-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
 SECRET_CLIENT_ID="${SECRET_CLIENT_ID:?SECRET_CLIENT_ID is required}"
 SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:?SECRET_CLIENT_SECRET is required}"
@@ -88,7 +90,7 @@ SECRET_TOKENS="${SECRET_TOKENS:?SECRET_TOKENS is required}"
 SECRET_ADMIN_LAUNCH="${SECRET_ADMIN_LAUNCH:?SECRET_ADMIN_LAUNCH is required}"
 
 GIT_SHA="$(git rev-parse --short HEAD)"
-IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/qb-service:${GIT_SHA}"
+IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${IMAGE_NAME}:${GIT_SHA}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
