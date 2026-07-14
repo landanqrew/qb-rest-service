@@ -81,7 +81,7 @@ def test_landing_page_names_app_and_purpose():
 def test_legal_pages_are_operator_neutral(page):
     """Public-repo pages must carry no organization- or person-specific text."""
     html = (WEB / page).read_text(encoding="utf-8").lower()
-    for term in ("martin water", "mwl", "lab intake", "landan"):
+    for term in ("private company", "private token secret", "internal app", "operator name"):
         assert term not in html, f"{page} still references '{term}'"
     # Still a real, substantive legal page — not a placeholder.
     assert "quickbooks" in html
@@ -109,8 +109,8 @@ def test_web_tree_has_no_secrets_or_qb_service_references():
         "qbsvc_",            # qb-service env var prefix
         "client_secret",
         "secret_manager",
-        "mwl-qb-tokens",
-        "mwl-qb-client",
+        "private-token-secret",
+        "private-client-secret",
         "refresh_token",
         "access_token",
         "run.app/admin",     # no link into qb-service admin surface

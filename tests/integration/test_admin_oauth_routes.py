@@ -163,7 +163,7 @@ def test_callback_valid_state_exchanges_and_saves_tokens(
 
     resp = client.get(
         "/admin/oauth/callback",
-        params={"code": "auth-code-xyz", "realmId": "9341454312345678", "state": state},
+        params={"code": "auth-code-xyz", "realmId": "1234567890", "state": state},
     )
 
     assert resp.status_code == 200
@@ -172,7 +172,7 @@ def test_callback_valid_state_exchanges_and_saves_tokens(
     assert saved is not None
     assert saved.access_token == "new-access"
     assert saved.refresh_token == "new-refresh"
-    assert saved.realm_id == "9341454312345678"
+    assert saved.realm_id == "1234567890"
     # The redirect_uri sent to Intuit must match the authorize step exactly.
     assert calls[0]["data"]["redirect_uri"] == REDIRECT_URI
     assert calls[0]["data"]["code"] == "auth-code-xyz"
@@ -388,7 +388,7 @@ def _connected(token_store) -> None:
         TokenData(
             access_token="live-access",
             refresh_token="live-refresh",
-            realm_id="9341454312345678",
+            realm_id="1234567890",
             expires_at=9_999_999_999.0,
         )
     )

@@ -27,7 +27,7 @@ router = APIRouter(prefix="/items", tags=["items"])
 # whitespace out of the URL segment used by the detail/update endpoints.
 _ITEM_ID_RE = re.compile(r"^\d{1,20}$")
 
-# QBO item Type enum. The Lab Intake catalogue is Services today, but Inventory
+# QBO item Type enum. The service catalogue is Services today, but Inventory
 # / NonInventory round-trip the same create call (Inventory needs extra QBO
 # fields we don't expose yet — those surface as a 502 from QBO, not a silent
 # success).
@@ -72,7 +72,7 @@ def get_item(
 
 # Intuit's "Duplicate Name Exists Error" fault code. QBO enforces item-name
 # uniqueness; we surface the collision as HTTP 409 (QBO_DUPLICATE_NAME) so the
-# Lab Intake app can dedupe deterministically — the same pattern the invoice
+# consuming app can dedupe deterministically — the same pattern the invoice
 # routes use for duplicate DocNumber (also code 6240). See scope §12.
 _DUPLICATE_NAME_CODE = "6240"
 

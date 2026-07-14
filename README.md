@@ -1,6 +1,6 @@
 # qb-service
 
-Thin REST proxy in front of the QuickBooks Online API. Built for the Martin Water Labs Lab Intake web app — owns OAuth, token refresh, and rate-limit handling so consumers don't have to.
+Thin REST proxy in front of the QuickBooks Online API. Built so a consuming web app can call QBO without owning OAuth, token refresh, or QBO request quirks.
 
 Architecture decision and design rationale: [`docs/qb-service-scope.md`](docs/qb-service-scope.md).
 
@@ -68,13 +68,13 @@ consuming app can't offer a real **Connect QuickBooks** button. `qb-admin`
 (issue #51) is the **same image** deployed as a second, *public* Cloud Run
 service that serves only `/admin/oauth/*` (data routes off). It's public at the
 edge but gated by a signed **launch token** the consuming app mints, so
-non-admins can't initiate the flow. Both services share the `mwl-qb-tokens`
-secret, so a connect done here is immediately live for `qb-service`.
+non-admins can't initiate the flow. Both services share the token secret named
+by `SECRET_TOKENS`, so a connect done here is immediately live for `qb-service`.
 
 ```bash
-export GCP_PROJECT=your-project-id REALM_ID=<realm> \
-       RETURN_URL=https://your-app.example.com/settings/integrations
-./deploy/qb-admin.deploy.sh
+cp .env.example .env.production
+# Fill in GCP_PROJECT, REALM_ID, RETURN_URL, and SECRET_* values.
+ENV_FILE=.env.production ./deploy/qb-admin.deploy.sh
 ```
 
 Three distinct surfaces, not to be confused: **readiness** (`GET

@@ -13,13 +13,14 @@
 #   REGION            — Cloud Run region, e.g. us-central1
 #   IMAGE             — fully-qualified container image, e.g.
 #                       us-central1-docker.pkg.dev/PROJECT_ID/qb-service/qb-service:GIT_SHA
-#   REALM_ID          — Intuit realm (company) ID for Martin Water Labs
+#   REALM_ID          — Intuit realm/company ID
+#   SECRET_TOKENS     — Secret Manager secret containing rotated token JSON
+#   SECRET_CLIENT_ID  — Secret Manager secret containing Intuit OAuth client ID
+#   SECRET_CLIENT_SECRET
+#                     — Secret Manager secret containing Intuit OAuth client secret
 #
 # Secret Manager secrets referenced (see deploy/iam-setup.md):
-#   mwl-qb-client-id      — Intuit OAuth client ID
-#   mwl-qb-client-secret  — Intuit OAuth client secret
-#   mwl-qb-tokens         — rotated refresh+access token blob (managed by
-#                            SecretManagerTokenStore at runtime)
+#   SECRET_CLIENT_ID, SECRET_CLIENT_SECRET, SECRET_TOKENS
 
 apiVersion: serving.knative.dev/v1
 kind: Service
@@ -62,16 +63,16 @@ spec:
             - name: QBSVC_REALM_ID
               value: REALM_ID
             - name: QBSVC_SECRET_NAME_TOKENS
-              value: mwl-qb-tokens
+              value: SECRET_TOKENS
             - name: QBSVC_INTUIT_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: mwl-qb-client-id
+                  name: SECRET_CLIENT_ID
                   key: latest
             - name: QBSVC_INTUIT_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: mwl-qb-client-secret
+                  name: SECRET_CLIENT_SECRET
                   key: latest
           resources:
             limits:

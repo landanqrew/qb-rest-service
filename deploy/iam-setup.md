@@ -12,11 +12,14 @@ idempotent; existing-resource errors are tolerated).
 
 ```bash
 export GCP_PROJECT="<your project id>"
-export REGION="us-central1"          # or wherever MWL infra lives
+export REGION="us-central1"          # or wherever the operator infra lives
 export SERVICE="qb-service"
 export AR_REPO="qb-service"
 export RUNTIME_SA="qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com"
-# Identities allowed to invoke the data routes (Lab Intake web app):
+export SECRET_CLIENT_ID="<client-id-secret-name>"
+export SECRET_CLIENT_SECRET="<client-secret-secret-name>"
+export SECRET_TOKENS="<token-store-secret-name>"
+# Identities allowed to invoke the data routes (consuming web app):
 export CALLER_SA="<web-app-runtime-sa>@<web-app-project>.iam.gserviceaccount.com"
 # Identity allowed to bootstrap OAuth (your personal Google identity):
 export ADMIN_USER="user:<you>@<domain>"
@@ -53,9 +56,9 @@ gcloud iam service-accounts create qb-service-runtime \
 
 ## 4. Create the three secrets
 
-`mwl-qb-client-id` and `mwl-qb-client-secret` hold the Intuit OAuth app
+`${SECRET_CLIENT_ID}` and `${SECRET_CLIENT_SECRET}` hold the Intuit OAuth app
 credentials (one value per secret so Cloud Run can mount each into a
-separate env var). `mwl-qb-tokens` holds the rotated refresh+access
+separate env var). `${SECRET_TOKENS}` holds the rotated refresh+access
 token blob; the runtime writes a new version to it on every refresh.
 
 `gcloud secrets create` errors with `ALREADY_EXISTS` if you re-run it, so each
@@ -64,34 +67,33 @@ append a new version, so it's safe to re-run them to rotate a value.
 
 ```bash
 # Intuit client ID
-gcloud secrets create mwl-qb-client-id \
+gcloud secrets create ${SECRET_CLIENT_ID} \
   --replication-policy=automatic \
   --project="${GCP_PROJECT}" || true
-printf '%s' '<INTUIT_CLIENT_ID>' | gcloud secrets versions add mwl-qb-client-id \
+printf '%s' '<INTUIT_CLIENT_ID>' | gcloud secrets versions add ${SECRET_CLIENT_ID} \
   --data-file=- --project="${GCP_PROJECT}"
 
 # Intuit client secret
-gcloud secrets create mwl-qb-client-secret \
+gcloud secrets create ${SECRET_CLIENT_SECRET} \
   --replication-policy=automatic \
   --project="${GCP_PROJECT}" || true
-printf '%s' '<INTUIT_CLIENT_SECRET>' | gcloud secrets versions add mwl-qb-client-secret \
+printf '%s' '<INTUIT_CLIENT_SECRET>' | gcloud secrets versions add ${SECRET_CLIENT_SECRET} \
   --data-file=- --project="${GCP_PROJECT}"
 
 # Token blob (created empty; populated by /admin/oauth/callback on first auth)
-gcloud secrets create mwl-qb-tokens \
+gcloud secrets create ${SECRET_TOKENS} \
   --replication-policy=automatic \
   --project="${GCP_PROJECT}" || true
 ```
 
-> **Note on naming.** The scope doc and issue #12 refer to the client
-> credentials as a single logical secret `mwl-qb-client`. We split it
-> into two GCP secrets (`mwl-qb-client-id`, `mwl-qb-client-secret`)
-> because Cloud Run's `--set-secrets` binds one secret per env var.
+> **Note on naming.** The service treats the client ID and client secret as
+> separate values because Cloud Run's `--set-secrets` binds one secret per env
+> var.
 
 ## 5. Grant the runtime SA Secret Manager access — only on these three
 
 ```bash
-for SECRET in mwl-qb-client-id mwl-qb-client-secret mwl-qb-tokens; do
+for SECRET in ${SECRET_CLIENT_ID} ${SECRET_CLIENT_SECRET} ${SECRET_TOKENS}; do
   gcloud secrets add-iam-policy-binding "${SECRET}" \
     --member="serviceAccount:${RUNTIME_SA}" \
     --role="roles/secretmanager.secretAccessor" \
@@ -99,7 +101,7 @@ for SECRET in mwl-qb-client-id mwl-qb-client-secret mwl-qb-tokens; do
 done
 
 # Token blob is the only secret the runtime writes to (rotated refresh tokens).
-gcloud secrets add-iam-policy-binding mwl-qb-tokens \
+gcloud secrets add-iam-policy-binding ${SECRET_TOKENS} \
   --member="serviceAccount:${RUNTIME_SA}" \
   --role="roles/secretmanager.secretVersionAdder" \
   --project="${GCP_PROJECT}"
@@ -132,7 +134,7 @@ need `roles/run.invoker` explicitly.
 After the first deploy succeeds:
 
 ```bash
-# Lab Intake web app's runtime SA → can hit the data routes
+# consuming web app's runtime SA → can hit the data routes
 gcloud run services add-iam-policy-binding "${SERVICE}" \
   --region="${REGION}" \
   --member="serviceAccount:${CALLER_SA}" \

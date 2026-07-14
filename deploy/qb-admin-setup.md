@@ -1,8 +1,8 @@
 # qb-admin — browser-safe OAuth bootstrap service (issue #51)
 
 `qb-admin` is a **public** Cloud Run service that hosts only the Intuit OAuth
-bootstrap surface (`/admin/oauth/*`). It exists so a consuming app (e.g. Sample
-Manager) can offer a real, in-browser **Connect QuickBooks** button.
+bootstrap surface (`/admin/oauth/*`). It exists so a consuming app can offer a
+real, in-browser **Connect QuickBooks** button.
 
 ## Why this service exists
 
@@ -24,9 +24,9 @@ are turned off on `qb-service`, so neither service hosts the other's surface.
 | `QBSVC_ENABLE_DATA_ROUTES` | `true` (default) | **`false`** |
 | `QBSVC_ENABLE_ADMIN_ROUTES` | `false` | `true` (default) |
 | Admin gate | IAM + `QBSVC_ADMIN_ALLOWLIST` | **launch token** (`QBSVC_ADMIN_LAUNCH_SECRET`) |
-| Token store | `mwl-qb-tokens` | **same** `mwl-qb-tokens` |
+| Token store | `${SECRET_TOKENS}` | **same** `${SECRET_TOKENS}` |
 
-Because both services read/write the same `mwl-qb-tokens` secret, a connect or
+Because both services read/write the same `${SECRET_TOKENS}` secret, a connect or
 re-auth performed through `qb-admin` is immediately visible to `qb-service` on
 its next QBO call.
 
@@ -46,7 +46,7 @@ bootstrap flow never touches `qb-service`'s locked edge.
 `/admin/oauth/{start,disconnect}` on `qb-admin` require a signed, short-lived
 **launch token**. The consuming app — which already authenticates its own admins
 — mints one server-side using the shared secret `QBSVC_ADMIN_LAUNCH_SECRET`
-(stored in Secret Manager as `mwl-qb-admin-launch`, and configured identically in
+(stored in Secret Manager as `${SECRET_ADMIN_LAUNCH}`, and configured identically in
 the app). It then renders the button as a link to:
 
 ```
@@ -82,7 +82,7 @@ The scheme is HMAC-SHA256 over the ASCII expiry timestamp, keyed by
 3. The admin approves. Intuit redirects the browser to
    `{qb-admin}/admin/oauth/callback?code=…&realmId=…&state=…`.
 4. `qb-admin` validates `state`, exchanges the code, and writes the rotated
-   refresh token to the shared `mwl-qb-tokens` secret.
+   refresh token to the shared `${SECRET_TOKENS}` secret.
 5. `qb-admin` redirects the browser back to `QBSVC_ADMIN_RETURN_URL`
    (the consuming app), appending `?qb_connected=1&realmId=…` so the app can
    confirm the outcome. **The consuming app never sees the Intuit token** — it
@@ -99,7 +99,7 @@ stored token (a new Secret Manager version), same as a first connect.
    gcloud iam service-accounts create qb-admin-runtime \
      --project="$GCP_PROJECT" --display-name="qb-admin OAuth bootstrap runtime"
 
-   for secret in mwl-qb-client-id mwl-qb-client-secret mwl-qb-tokens mwl-qb-admin-launch; do
+   for secret in ${SECRET_CLIENT_ID} ${SECRET_CLIENT_SECRET} ${SECRET_TOKENS} ${SECRET_ADMIN_LAUNCH}; do
      gcloud secrets add-iam-policy-binding "$secret" \
        --project="$GCP_PROJECT" \
        --member="serviceAccount:qb-admin-runtime@${GCP_PROJECT}.iam.gserviceaccount.com" \
@@ -107,25 +107,23 @@ stored token (a new Secret Manager version), same as a first connect.
    done
    ```
 
-   `mwl-qb-tokens` write access (`secretVersionAdder`) is also required so the
+   `${SECRET_TOKENS}` write access (`secretVersionAdder`) is also required so the
    callback can persist the rotated token — grant it the same way if your
    `SecretManagerTokenStore` role split separates read from write.
 
 2. **Create the launch secret** and set the same value in the consuming app:
 
    ```bash
-   openssl rand -base64 48 | gcloud secrets create mwl-qb-admin-launch \
+   openssl rand -base64 48 | gcloud secrets create ${SECRET_ADMIN_LAUNCH} \
      --project="$GCP_PROJECT" --data-file=-
    ```
 
 ## Deploy
 
 ```bash
-export GCP_PROJECT=your-project-id
-export REALM_ID=<intuit-realm-id>
-export RETURN_URL=https://sample-manager.example.com/settings/integrations
-export INTUIT_ENV=production        # or sandbox
-./deploy/qb-admin.deploy.sh
+cp .env.example .env.production
+# Fill in GCP_PROJECT, REALM_ID, RETURN_URL, INTUIT_ENV, and SECRET_* values.
+ENV_FILE=.env.production ./deploy/qb-admin.deploy.sh
 ```
 
 Then register `{qb-admin-url}/admin/oauth/callback` as a **redirect URI** in the

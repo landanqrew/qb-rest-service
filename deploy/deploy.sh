@@ -5,18 +5,25 @@
 # /readyz with QBSVC_ENABLE_ADMIN_ROUTES=false, so the browser OAuth admin
 # surface (/admin/oauth/*) is NOT hosted here. OAuth bootstrap runs on the
 # separate public qb-admin service — see deploy/qb-admin.deploy.sh and
-# deploy/qb-admin-setup.md. Both services share the same image and the same
-# mwl-qb-tokens secret.
+# deploy/qb-admin-setup.md. Both services share the same image and token
+# Secret Manager secret.
 #
 # Idempotent: re-running deploys a new revision. Routes 100% of traffic to the
 # new revision once /healthz passes the startup probe.
 #
-# Required env vars (export before running, or pass on the command line):
+# Required env vars (export before running, pass on the command line, or set
+# ENV_FILE=.env.production / ENV_FILE=.env.sandbox so this script loads them):
 #   GCP_PROJECT       GCP project ID hosting Cloud Run + Secret Manager
+#   REALM_ID          Intuit realm (company) ID
+#   SECRET_CLIENT_ID  Secret Manager secret containing Intuit OAuth client ID
+#   SECRET_CLIENT_SECRET
+#                     Secret Manager secret containing Intuit OAuth client secret
+#   SECRET_TOKENS     Secret Manager secret containing rotated token JSON
+#
+# Optional:
 #   REGION            Cloud Run region (default: us-central1)
 #   SERVICE           Cloud Run service name (default: qb-service)
 #   AR_REPO           Artifact Registry repo name (default: qb-service)
-#   REALM_ID          Intuit realm (company) ID for Martin Water Labs
 #   RUNTIME_SA        Runtime service account email (default:
 #                       qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com)
 #   INTUIT_ENV        "production" or "sandbox" (default: production). Sandbox
@@ -27,13 +34,20 @@
 # Prerequisites (see deploy/iam-setup.md):
 #   - Artifact Registry repo ${AR_REPO} exists in ${REGION}
 #   - Runtime service account exists and has
-#       roles/secretmanager.secretAccessor on mwl-qb-client-id,
-#       mwl-qb-client-secret, and mwl-qb-tokens
-#   - Secrets mwl-qb-client-id and mwl-qb-client-secret already populated
-#   - Secret mwl-qb-tokens exists (can be empty; bootstrapped via the qb-admin
+#       roles/secretmanager.secretAccessor on ${SECRET_CLIENT_ID},
+#       ${SECRET_CLIENT_SECRET}, and ${SECRET_TOKENS}
+#   - Secrets ${SECRET_CLIENT_ID} and ${SECRET_CLIENT_SECRET} already populated
+#   - Secret ${SECRET_TOKENS} exists (can be empty; bootstrapped via the qb-admin
 #     service's /admin/oauth/start, not this IAM-locked data service)
 
 set -euo pipefail
+
+if [[ -n "${ENV_FILE:-}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
 
 GCP_PROJECT="${GCP_PROJECT:?GCP_PROJECT is required}"
 REALM_ID="${REALM_ID:?REALM_ID is required}"
@@ -57,12 +71,9 @@ else
 fi
 AR_REPO="${AR_REPO:-qb-service}"
 RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
-# Secret Manager secret names — parameterized so sandbox can use its own
-# Intuit dev-app keys and its own tokens blob without stepping on prod's.
-# Defaults preserve the original single-env behavior.
-SECRET_CLIENT_ID="${SECRET_CLIENT_ID:-mwl-qb-client-id}"
-SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:-mwl-qb-client-secret}"
-SECRET_TOKENS="${SECRET_TOKENS:-mwl-qb-tokens}"
+SECRET_CLIENT_ID="${SECRET_CLIENT_ID:?SECRET_CLIENT_ID is required}"
+SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:?SECRET_CLIENT_SECRET is required}"
+SECRET_TOKENS="${SECRET_TOKENS:?SECRET_TOKENS is required}"
 
 GIT_SHA="$(git rev-parse --short HEAD)"
 IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE}:${GIT_SHA}"
@@ -117,8 +128,8 @@ echo "  1. Verify: curl -H \"Authorization: Bearer \$(gcloud auth print-identity
 echo "     (503 NOT_AUTHENTICATED is expected until QuickBooks is connected.)"
 echo "  2. Connect QuickBooks via the qb-admin service — this data service does"
 echo "     NOT host the browser OAuth flow. Deploy it with deploy/qb-admin.deploy.sh"
-echo "     and follow deploy/qb-admin-setup.md. Both services share mwl-qb-tokens,"
+echo "     and follow deploy/qb-admin-setup.md. Both services share ${SECRET_TOKENS},"
 echo "     so a connect done on qb-admin is immediately visible here."
-echo "  3. Point Sample Manager at both URLs:"
+echo "  3. Point consuming app at both URLs:"
 echo "       QB_SERVICE_URL=${URL}"
 echo "       QB_OAUTH_START_URL=<qb-admin-url>/admin/oauth/start"

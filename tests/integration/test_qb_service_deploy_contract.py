@@ -83,7 +83,7 @@ def test_deploy_script_does_not_direct_operators_to_locked_oauth_start():
     assert "${URL}/admin/oauth/start" not in text
     assert "admin identity" not in text
     # Points operators at the browser-safe bootstrap service for OAuth, and
-    # surfaces the two-URL Sample Manager config from the acceptance criteria.
+    # surfaces the two-URL consuming app config from the acceptance criteria.
     assert "qb-admin" in text
     assert "QB_OAUTH_START_URL=" in text
 

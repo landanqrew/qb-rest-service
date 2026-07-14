@@ -32,8 +32,8 @@ def test_secret_manager_backend_selected_via_env(monkeypatch):
     ) as build:
         settings = Settings(
             token_backend="secret_manager",
-            gcp_project="mwl-prod",
-            secret_name_tokens="mwl-qb-tokens",
+            gcp_project="test-project",
+            secret_name_tokens="test-token-secret",
         )
         store = get_token_store(settings=settings)
     assert isinstance(store, SecretManagerTokenStore)
@@ -47,8 +47,8 @@ def test_secret_manager_backend_is_memoized():
     with patch("qbsvc.deps._build_secret_manager_client", return_value=object()):
         settings = Settings(
             token_backend="secret_manager",
-            gcp_project="mwl-prod",
-            secret_name_tokens="mwl-qb-tokens",
+            gcp_project="test-project",
+            secret_name_tokens="test-token-secret",
         )
         first = get_token_store(settings=settings)
         second = get_token_store(settings=settings)
@@ -66,7 +66,7 @@ def test_secret_manager_backend_requires_gcp_project():
 
 def test_healthz_still_returns_200_with_secret_manager_backend(monkeypatch):
     monkeypatch.setenv("QBSVC_TOKEN_BACKEND", "secret_manager")
-    monkeypatch.setenv("QBSVC_GCP_PROJECT", "mwl-prod")
+    monkeypatch.setenv("QBSVC_GCP_PROJECT", "test-project")
     # Reset the cached Settings since env changed.
     from qbsvc.config import get_settings
 

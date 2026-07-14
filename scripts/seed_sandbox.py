@@ -12,7 +12,7 @@ Prerequisites
 2. Sandbox tokens live at ``~/.config/qbsvc/tokens.sandbox.json`` (the
    QBClient's FileTokenStore layout — see ``qbsvc.auth.tokens.TokenData``).
    Populate them by connecting the sandbox realm through qb-admin-sandbox,
-   then exporting the ``mwl-qb-sandbox-tokens`` blob to that path.
+   then exporting the ``qbsvc-sandbox-token-store`` blob to that path.
 3. A dotenv file at the repo root with the SANDBOX Intuit app credentials
    (only the sandbox client is built now that prod comes from files)::
 

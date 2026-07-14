@@ -30,9 +30,9 @@ def test_deploy_script_is_public_and_data_routes_off():
     assert "--allow-unauthenticated" in text
     assert "QBSVC_ENABLE_DATA_ROUTES=false" in text
     # The launch secret must be wired from Secret Manager.
-    assert "QBSVC_ADMIN_LAUNCH_SECRET=mwl-qb-admin-launch" in text
+    assert "QBSVC_ADMIN_LAUNCH_SECRET=${SECRET_ADMIN_LAUNCH}:latest" in text
     # Shares the token secret with qb-service.
-    assert "QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens" in text
+    assert "QBSVC_SECRET_NAME_TOKENS=${SECRET_TOKENS}" in text
     # A public service must NOT assign an IAM email allowlist (meaningless
     # here). Comments may mention it by name; only the assignment form is banned.
     assert "QBSVC_ADMIN_ALLOWLIST=" not in text
@@ -46,8 +46,8 @@ def test_deploy_yaml_is_public_shape_and_gated():
     assert (
         'name: QBSVC_ENABLE_DATA_ROUTES\n              value: "false"' in text
     )
-    assert "mwl-qb-admin-launch" in text
-    assert "mwl-qb-tokens" in text
+    assert "SECRET_ADMIN_LAUNCH" in text
+    assert "SECRET_TOKENS" in text
     # No IAM allowlist env declared on the public service (comments may name it).
     assert "name: QBSVC_ADMIN_ALLOWLIST" not in text
     # Dedicated runtime SA, not qb-service's.

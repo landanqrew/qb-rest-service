@@ -6,7 +6,7 @@ by default — the whole module skips unless `QBSVC_LIVE_BASE_URL` is set.
 
 Run it:
 
-    export QBSVC_LIVE_BASE_URL=https://qb-service-5htcalpr7a-uc.a.run.app
+    export QBSVC_LIVE_BASE_URL=https://qb-service-HASH-REGION.a.run.app
     # token is read from QBSVC_LIVE_ID_TOKEN, else minted via gcloud:
     uv run --extra dev --extra gcp pytest tests/live -q
 

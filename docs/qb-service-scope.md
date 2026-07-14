@@ -8,7 +8,7 @@
 
 ## 1. Purpose
 
-A small HTTP service that fronts the QuickBooks Online API for the Martin Water Labs Lab Intake web app. It owns OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. It holds no business data — the Lab Intake app's database remains the source of truth for jobs/samples/orders.
+A small HTTP service that fronts the QuickBooks Online API for a consuming web app. It owns OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. It holds no business data — the consuming app's database remains the source of truth for jobs/samples/orders.
 
 ## 2. Goals
 
@@ -21,14 +21,14 @@ A small HTTP service that fronts the QuickBooks Online API for the Martin Water 
 
 - **No business logic.** No invoice numbering, no test-code → item mapping, no sample lifecycle. Those live in the web app.
 - **No database.** No caching layer, no warm pull. Every request hits QBO live. (If read latency becomes a problem, that's the trigger to revisit Option C — not now.)
-- **No CLI features.** Payments, estimates, vendors, bills, P&L, table output — all stay in `quickbooks-cli`. The service exposes only what the Lab Intake app needs.
+- **No CLI features.** Payments, estimates, vendors, bills, P&L, table output — all stay in `quickbooks-cli`. The service exposes only what the consuming app needs.
 - **No webhook ingestion** (Option D territory).
-- **No multi-tenant SaaS shape.** One deployment, one QBO realm (Martin Water Labs). Revisit only if MWL onboards a second QBO company.
+- **No multi-tenant SaaS shape.** One deployment, one QBO realm (the operator's QuickBooks company). Revisit only if the operator onboards a second QBO company.
 
 ## 4. Architecture
 
 ```
-Lab Intake Web App  ──ID token──▶  qb-service (Cloud Run)  ──OAuth──▶  QuickBooks Online
+Consuming Web App  ──ID token──▶  qb-service (Cloud Run)  ──OAuth──▶  QuickBooks Online
                                           │
                                           ├─ reads:  client_id/secret  from Secret Manager
                                           └─ reads+writes: refresh token  to Secret Manager
@@ -161,8 +161,8 @@ HTTP status codes mirror QBO where meaningful (400, 401, 404, 409, 429), with 50
 - **Admin routes (`/admin/oauth/*`)** are gated more tightly: only specific Google identities (the project admin — you) get `roles/run.invoker` for them. The web app's service account does **not**. Enforced via a second Cloud Run service or path-level IAM (TBD during Phase 4).
 
 ### Layer 2 — qb-service → QBO
-- Client ID + secret loaded from Secret Manager (`mwl-qb-client`) at startup.
-- Initial refresh token bootstrapped manually (see §8), stored in Secret Manager (`mwl-qb-tokens`).
+- Client ID + secret loaded from Secret Manager (`SECRET_CLIENT_ID` and `SECRET_CLIENT_SECRET`) at startup.
+- Initial refresh token bootstrapped manually (see §8), stored in Secret Manager (`SECRET_TOKENS`).
 - On every request: in-memory access token if valid, else refresh from Intuit.
 - **Critical:** when Intuit rotates the refresh token, write the new value as a new Secret Manager version. Without this, the service breaks on next cold start.
 - Concurrency on refresh: an `asyncio.Lock` (or process-wide threading lock) around the refresh path to avoid double-refresh under burst.
@@ -242,7 +242,7 @@ QBO limit: **500 req/min per realm**. With one realm and one consumer, unlikely 
 
 ## 14. Deployment
 
-- Cloud Run service, region `us-central1` (or wherever MWL infra lives).
+- Cloud Run service, region `us-central1` (or wherever the operator infra lives).
 - Service account: dedicated, with `roles/secretmanager.secretAccessor` on the two secrets only.
 - Min instances: 0 (cost) or 1 (no cold-start latency for refresh) — decide based on usage pattern.
 - Concurrency: 80 (default) is fine; QBO calls are I/O bound.
@@ -265,15 +265,15 @@ Intuit production keys require publicly resolvable URLs for the app's landing pa
 | **2 — Read endpoints** | `customers`, `items`, `invoices` GET routes + pagination + filters | Web app team can prototype against deployed service |
 | **3 — Write endpoints** | `POST /v1/invoices`, `POST /v1/invoices/{id}/lines` | Test invoice round-trips through sandbox + prod realm |
 | **3b — Extended writes** *(Amendment 1)* | `POST/PUT/DELETE /v1/items/*`, `PUT/DELETE /v1/invoices/{id}`, `POST /v1/invoices/{id}/void`, `PUT/DELETE /v1/invoices/{id}/lines/{line_id}` | Item lifecycle + invoice edit/void/delete round-trip through sandbox |
-| **4 — Hardening** | Structured logging, error envelope, rate limiter, IAM lockdown, observability | Ready for Lab Intake web app to depend on it |
-| **4b — Production launch** *(Amendment 2)* | `qb-pages` public pages service; deploy both services to Cloud Run; Intuit app production keys + redirect URIs; OAuth bootstrap against the prod realm | `GET /v1/customers` works end-to-end against the production MWL realm |
-| **5 — Web app integration** | (Other repo) | Phase 3 of the Lab Intake diagram works end-to-end |
+| **4 — Hardening** | Structured logging, error envelope, rate limiter, IAM lockdown, observability | Ready for consuming web app to depend on it |
+| **4b — Production launch** *(Amendment 2)* | `qb-pages` public pages service; deploy both services to Cloud Run; Intuit app production keys + redirect URIs; OAuth bootstrap against the prod realm | `GET /v1/customers` works end-to-end against the production the operator realm |
+| **5 — Web app integration** | (Other repo) | Phase 3 of the consuming app diagram works end-to-end |
 
 Estimate: Phases 0–4 are roughly a week of focused work for one person, gated on Cloud Run + Secret Manager being set up.
 
 ## 16. Open questions
 
-1. **Single realm or design for N?** Recommendation: single realm for v1 (simpler env config). Multi-realm becomes a `X-QB-Realm` header + per-realm token secret if MWL ever adds a second company.
+1. **Single realm or design for N?** Recommendation: single realm for v1 (simpler env config). Multi-realm becomes a `X-QB-Realm` header + per-realm token secret if the operator ever adds a second company.
 2. **Pagination shape:** pass through QBO's `STARTPOSITION` offsets, or normalize to opaque cursors? Recommendation: opaque cursors (base64-encoded offset) so we can change the underlying impl later without breaking the web app.
 3. **`modified_since` filter:** QBO supports `MetaData.LastUpdatedTime > 'YYYY-MM-DD'` via SQL. Worth exposing on all list endpoints so the web app can do delta pulls if it ever wants to cache. Cheap to add.
 4. ~~Should the bootstrap refresh-token step live in this repo or stay in `quickbooks-cli`?~~ **Resolved:** qb-service owns the full OAuth flow via `/admin/oauth/*` (§8). No bootstrap CLI; the CLI keeps its own independent auth for its own use case.
@@ -284,7 +284,7 @@ Estimate: Phases 0–4 are roughly a week of focused work for one person, gated 
 ## 17. What we are *not* deciding now
 
 - The web app's own architecture (framework, hosting, DB).
-- How the Lab Intake DB schema maps Test Code → QBO Item Id (that mapping is owned by the web app, surfaced when it POSTs invoice lines).
+- How the consuming app database schema maps Test Code → QBO Item Id (that mapping is owned by the web app, surfaced when it POSTs invoice lines).
 - Drive folder provisioning. Out of scope for qb-service entirely — that's a separate concern (Google Drive API), not QBO.
 
 ---
@@ -293,7 +293,7 @@ Estimate: Phases 0–4 are roughly a week of focused work for one person, gated 
 
 ### Amendment 1 — 2026-06-06: full CRUD surface
 
-The Lab Intake requirements list asks for a wider write surface than v1 scoped: item create/update/delete, invoice update/delete, and line-item update/delete. This amendment adds those routes (§6), a delivery phase for them (§15, Phase 3b), idempotency notes (§12), and one new open question (§16 #7).
+The consuming app requirements list asks for a wider write surface than v1 scoped: item create/update/delete, invoice update/delete, and line-item update/delete. This amendment adds those routes (§6), a delivery phase for them (§15, Phase 3b), idempotency notes (§12), and one new open question (§16 #7).
 
 **No OAuth change needed.** Intuit has no per-entity scopes; `com.intuit.quickbooks.accounting` already grants full read/write to every entity here. Entity/verb granularity is enforced entirely by which routes this service exposes.
 
@@ -317,10 +317,10 @@ Also adds Phase 4b (§15) covering the launch sequence: pages service → deploy
 
 Before cloning to a new repo, confirm:
 
-- [ ] Single realm assumption is correct (one QBO company for MWL)
+- [ ] Single realm assumption is correct (one QBO company for the operator)
 - [ ] Cloud Run is the right runtime (vs. Cloud Functions Gen 2 or App Engine)
 - [ ] Pagination as opaque cursors is acceptable
 - [ ] Browser-driven OAuth via `/admin/oauth/*` is the right bootstrap approach
 - [ ] Path-level IAM (admin vs. service-account callers) is achievable on Cloud Run, or split into two services if not
 - [ ] Phased delivery order matches your priorities
-- [ ] Any endpoints missing from §6 that Phase 3/4 of the Lab Intake diagram will need
+- [ ] Any endpoints missing from §6 that Phase 3/4 of the consuming app diagram will need

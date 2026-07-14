@@ -27,7 +27,7 @@ uv run --extra dev --extra gcp pytest tests/unit
 Opt-in and strictly read-only (they never create/mutate/delete QBO data):
 
 ```bash
-export QBSVC_LIVE_BASE_URL=https://qb-service-5htcalpr7a-uc.a.run.app
+export QBSVC_LIVE_BASE_URL=https://qb-service-HASH-REGION.a.run.app
 # token is read from QBSVC_LIVE_ID_TOKEN if set, else minted via gcloud:
 export QBSVC_LIVE_ID_TOKEN="$(gcloud auth print-identity-token)"
 uv run --extra dev --extra gcp pytest tests/live -q
