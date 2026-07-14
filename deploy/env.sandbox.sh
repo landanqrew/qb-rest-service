@@ -12,9 +12,12 @@
 export GCP_PROJECT=martin-water-labs
 export INTUIT_ENV=sandbox
 
-# Same realmId as prod — only the Intuit app's client_id/secret differ
-# between sandbox and production.
-export REALM_ID=9130352324794416
+# Distinct sandbox company realmId ("Sandbox Company_US_1"). NOTE: this is a
+# different company from production (prod realm is 9130352324794416). The
+# earlier assumption that both shared one realmId was wrong — the runtime
+# client uses the token's realm_id, so a mismatch here is cosmetic, but keep
+# it accurate.
+export REALM_ID=9341456173900494
 
 # Sandbox-specific Secret Manager secrets. These do NOT exist in
 # martin-water-labs yet — create them before the first deploy:
@@ -54,4 +57,3 @@ export RETURN_URL=https://sample-manager--martin-water-labs.us-central1.hosted.a
 #   openssl rand -hex 32 | tr -d '\n' | \
 #     gcloud secrets versions add mwl-qb-sandbox-admin-launch --data-file=- --project=martin-water-labs
 export SECRET_ADMIN_LAUNCH=mwl-qb-sandbox-admin-launch
-

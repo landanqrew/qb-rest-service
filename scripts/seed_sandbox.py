@@ -4,28 +4,25 @@ One-off developer script. Not part of the runtime service.
 
 Prerequisites
 -------------
-1. Prod tokens live at ``~/.config/qbsvc/tokens.prod.json`` (the QBClient's
-   FileTokenStore layout — see ``qbsvc.auth.tokens.TokenData``).
-2. Sandbox tokens live at ``~/.config/qbsvc/tokens.sandbox.json``. Seed them
-   by running the existing OAuth flow with ``QBSVC_INTUIT_ENVIRONMENT=sandbox``
-   and a redirected token path — the simplest path is to start the service
-   with those env vars set and hit ``/admin/oauth/start`` once.
-3. Two dotenv files at the repo root with each realm's Intuit app
-   credentials (Intuit issues distinct client_id/secret per app — sandbox
-   vs production — and refresh tokens are signed by their app's pair)::
-
-       # .env.production
-       QBSVC_INTUIT_CLIENT_ID=...
-       QBSVC_INTUIT_CLIENT_SECRET=...
+1. Prod Customer + Item data exported to JSON at
+   ``~/qb-exports/prod/{customers,items}.json`` (full QBO entities). The
+   script reads prod from these files rather than querying prod live, so it
+   never holds a prod refresh token — no chance of rotating the token out
+   from under the deployed prod service.
+2. Sandbox tokens live at ``~/.config/qbsvc/tokens.sandbox.json`` (the
+   QBClient's FileTokenStore layout — see ``qbsvc.auth.tokens.TokenData``).
+   Populate them by connecting the sandbox realm through qb-admin-sandbox,
+   then exporting the ``mwl-qb-sandbox-tokens`` blob to that path.
+3. A dotenv file at the repo root with the SANDBOX Intuit app credentials
+   (only the sandbox client is built now that prod comes from files)::
 
        # .env.sandbox
        QBSVC_INTUIT_CLIENT_ID=...
        QBSVC_INTUIT_CLIENT_SECRET=...
 
-   Both are covered by the repo's ``.env*`` gitignore rule. The script
-   reads them directly (not via ``os.environ``) so an exported
-   ``QBSVC_INTUIT_*`` from a running service can't leak into either
-   client.
+   Covered by the repo's ``.env*`` gitignore rule. Read via ``dotenv_values``
+   (not ``os.environ``) so a running service's exported ``QBSVC_INTUIT_*``
+   can't leak into the client.
 
 Usage
 -----
@@ -54,6 +51,7 @@ import copy
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -66,21 +64,33 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 from qbsvc.api.client import QBClient  # noqa: E402
 from qbsvc.auth.tokens import FileTokenStore  # noqa: E402
 from qbsvc.config import Settings  # noqa: E402
-from qbsvc.exceptions import APIError  # noqa: E402
+from qbsvc.exceptions import APIError, RateLimitError  # noqa: E402
 
 TOKEN_DIR = Path.home() / ".config" / "qbsvc"
-PROD_TOKEN_PATH = TOKEN_DIR / "tokens.prod.json"
 SANDBOX_TOKEN_PATH = TOKEN_DIR / "tokens.sandbox.json"
+EXPORT_DIR = Path.home() / "qb-exports" / "prod"
 STATE_PATH = _REPO_ROOT / "scripts" / ".seed_state.json"
 
 ENV_FILES = {
-    "production": _REPO_ROOT / ".env.production",
     "sandbox": _REPO_ROOT / ".env.sandbox",
 }
 
 # Fields that either belong to the source realm (Id, SyncToken) or are
 # populated by QBO on create (MetaData). Passing them through causes 400s.
 STRIP_FIELDS = ("Id", "SyncToken", "MetaData", "domain", "sparse")
+
+# Refs on prod Customers pointing at prod-realm object ids with no sandbox
+# equivalent by id (sandbox has its own Terms / PaymentMethods / CustomerTypes).
+# Dropped for seeding — test data doesn't need these presets, and passing a
+# prod id yields "Invalid Reference Id ... not found". CurrencyRef is kept: its
+# value is a currency code ("USD"), not a realm id.
+CUSTOMER_STRIP_REFS = ("CustomerTypeRef", "PaymentMethodRef", "SalesTermRef")
+
+# The sandbox rejects sustained write bursts with a generic 500-style error
+# wrapped in a 400 ("unexpected error ... please wait and try again"). Pace
+# writes and back off on that (and on the local bucket's RateLimitError).
+SANDBOX_WRITE_DELAY_SEC = 0.5
+_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 _log = logging.getLogger("seed_sandbox")
 
@@ -159,11 +169,64 @@ def _build_client(env: str, token_path: Path) -> QBClient:
 # --------------------------------------------------------------------------- #
 
 
+def _load_prod_entities(name: str) -> list[dict]:
+    """Load Active prod records from the JSON export (not a live prod query).
+
+    ``name`` is the export basename (``customers`` / ``items``). Filters to
+    Active records to match the original ``SELECT ... WHERE Active = true``
+    behavior; the export itself includes inactive rows.
+    """
+    path = EXPORT_DIR / f"{name}.json"
+    if not path.exists():
+        raise SystemExit(
+            f"Missing prod export {path}. Produce it first with the read-only "
+            "export against the deployed data API."
+        )
+    records = json.loads(path.read_text())
+    return [r for r in records if r.get("Active") is True]
+
+
 def _strip(entity: dict) -> dict:
     clean = copy.deepcopy(entity)
     for f in STRIP_FIELDS:
         clean.pop(f, None)
     return clean
+
+
+def _post_with_retry(
+    client: QBClient, endpoint: str, payload: dict, *, attempts: int = 5
+) -> dict:
+    """POST with exponential backoff on transient sandbox/QBO errors.
+
+    The sandbox returns a generic "unexpected error ... please wait and try
+    again" under write load, and the local token bucket raises RateLimitError
+    if we outrun it — both retryable. Deterministic validation errors (bad
+    ref, duplicate name) re-raise immediately so the caller logs and skips.
+    """
+    for i in range(attempts):
+        try:
+            return client.post(endpoint, payload)
+        except (APIError, RateLimitError) as e:
+            if isinstance(e, APIError):
+                detail = (e.detail or "").lower()
+                transient = (
+                    e.status_code in _TRANSIENT_STATUS
+                    or "unexpected error" in detail
+                    or "please wait" in detail
+                )
+            else:  # RateLimitError — always retryable
+                transient = True
+            if not transient or i == attempts - 1:
+                raise
+            delay = 2.0 * (2**i)  # 2, 4, 8, 16s
+            _log.warning(
+                "transient_post_retry endpoint=%s attempt=%d delay=%.0fs",
+                endpoint,
+                i + 1,
+                delay,
+            )
+            time.sleep(delay)
+    raise RuntimeError("unreachable")  # last attempt always returns or raises
 
 
 def _paginated_query(client: QBClient, entity: str, where: str = "") -> list[dict]:
@@ -235,15 +298,18 @@ def _topo_sort(entities: list[dict], parent_key: str = "ParentRef") -> list[dict
 
 
 def seed_customers(
-    prod: QBClient,
     sandbox: QBClient,
+    customers: list[dict],
     state: dict[str, dict[str, str]],
     dry_run: bool,
+    limit: int | None = None,
 ) -> None:
-    customers = _paginated_query(prod, "Customer", "Active = true")
-    _log.info("fetched customers count=%d", len(customers))
+    _log.info("prod customers loaded count=%d", len(customers))
 
     ordered = _topo_sort(customers)
+    if limit is not None:
+        ordered = ordered[:limit]
+        _log.info("customer limit applied count=%d", len(ordered))
     customer_map = state["Customer"]
 
     for c in ordered:
@@ -252,6 +318,8 @@ def seed_customers(
             continue
 
         payload = _strip(c)
+        for ref in CUSTOMER_STRIP_REFS:
+            payload.pop(ref, None)
         parent = payload.get("ParentRef")
         if parent:
             sandbox_parent = customer_map.get(parent.get("value"))
@@ -272,8 +340,9 @@ def seed_customers(
             _log.info("dry_run customer prod_id=%s name=%s", prod_id, c.get("DisplayName"))
             continue
 
+        time.sleep(SANDBOX_WRITE_DELAY_SEC)  # pace writes so the sandbox doesn't choke
         try:
-            resp = sandbox.post("customer", payload)
+            resp = _post_with_retry(sandbox, "customer", payload)
         except APIError as e:
             _log.error(
                 "customer_create_failed prod_id=%s name=%s status=%s detail=%s",
@@ -332,18 +401,21 @@ def _remap_account_refs(
 
 
 def seed_items(
-    prod: QBClient,
     sandbox: QBClient,
+    items: list[dict],
     state: dict[str, dict[str, str]],
     dry_run: bool,
+    limit: int | None = None,
 ) -> None:
     account_map = _sandbox_account_map(sandbox)
     _log.info("sandbox accounts loaded count=%d", len(account_map))
 
-    items = _paginated_query(prod, "Item", "Active = true")
-    _log.info("fetched items count=%d", len(items))
+    _log.info("prod items loaded count=%d", len(items))
 
     ordered = _topo_sort(items)
+    if limit is not None:
+        ordered = ordered[:limit]
+        _log.info("item limit applied count=%d", len(ordered))
     item_map = state["Item"]
 
     for it in ordered:
@@ -386,8 +458,9 @@ def seed_items(
             )
             continue
 
+        time.sleep(SANDBOX_WRITE_DELAY_SEC)  # pace writes so the sandbox doesn't choke
         try:
-            resp = sandbox.post("item", payload)
+            resp = _post_with_retry(sandbox, "item", payload)
         except APIError as e:
             _log.error(
                 "item_create_failed prod_id=%s name=%s status=%s detail=%s",
@@ -425,6 +498,12 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Query prod and log what would be created; don't POST to sandbox.",
     )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap creates per entity (after topo-sort). Use for a small test batch.",
+    )
     return p.parse_args(list(argv) if argv is not None else None)
 
 
@@ -435,15 +514,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     args = _parse_args(argv)
 
-    prod = _build_client("production", PROD_TOKEN_PATH)
     sandbox = _build_client("sandbox", SANDBOX_TOKEN_PATH)
     try:
         state = load_state()
 
         if args.only in (None, "customers"):
-            seed_customers(prod, sandbox, state, args.dry_run)
+            seed_customers(
+                sandbox, _load_prod_entities("customers"), state, args.dry_run, args.limit
+            )
         if args.only in (None, "items"):
-            seed_items(prod, sandbox, state, args.dry_run)
+            seed_items(
+                sandbox, _load_prod_entities("items"), state, args.dry_run, args.limit
+            )
 
         _log.info(
             "done customers=%d items=%d",
@@ -451,7 +533,6 @@ def main(argv: Iterable[str] | None = None) -> int:
             len(state["Item"]),
         )
     finally:
-        prod.close()
         sandbox.close()
     return 0
 
