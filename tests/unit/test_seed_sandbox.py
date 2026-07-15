@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -134,4 +135,94 @@ def test_customer_failure_is_captured_in_run_summary(monkeypatch):
         "detail": "Duplicate Name Exists Error",
         "intuit_tid": "tid-123",
         "errors": [{"code": "6240", "message": "Duplicate Name Exists Error"}],
+    }
+
+
+def test_repull_prod_overwrites_requested_export_only(monkeypatch, tmp_path):
+    calls: list[tuple[str, str]] = []
+
+    class FakeProductionClient:
+        def close(self):
+            calls.append(("close", ""))
+
+    def fake_query(_client, entity, where=""):
+        calls.append((entity, where))
+        return [{"Id": "1", "Active": True, "Name": entity}]
+
+    monkeypatch.setattr(seed_sandbox, "production_export_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        seed_sandbox, "_build_production_export_client", lambda: FakeProductionClient()
+    )
+    monkeypatch.setattr(seed_sandbox, "_paginated_query", fake_query)
+
+    result = seed_sandbox.repull_prod_exports(only="customers")
+
+    assert result == {"status": "completed", "Customer": 1}
+    assert calls == [("Customer", "Active IN (true, false)"), ("close", "")]
+    assert (tmp_path / "customers.json").read_text() == (
+        '[\n  {\n    "Active": true,\n    "Id": "1",\n    "Name": "Customer"\n  }\n]\n'
+    )
+    assert not (tmp_path / "items.json").exists()
+
+
+def test_production_export_config_reads_service_or_deploy_names(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(
+        "QBSVC_INTUIT_CLIENT_ID=prod-id\n"
+        "QBSVC_INTUIT_CLIENT_SECRET=prod-secret\n"
+        "GCP_PROJECT=project-1\n"
+        "SECRET_TOKENS=prod-token-secret\n"
+        "REALM_ID=12345\n"
+    )
+    monkeypatch.setitem(seed_sandbox.ENV_FILES, "production", env_file)
+
+    assert seed_sandbox.production_export_config() == {
+        "client_id": "prod-id",
+        "client_secret": "prod-secret",
+        "gcp_project": "project-1",
+        "token_secret": "prod-token-secret",
+        "realm_id": "12345",
+    }
+
+
+def test_load_prod_entities_uses_realm_namespaced_export_directory(monkeypatch, tmp_path):
+    (tmp_path / "customers.json").write_text(
+        '[{"Id": "active", "Active": true}, {"Id": "inactive", "Active": false}]'
+    )
+    monkeypatch.setattr(seed_sandbox, "production_export_dir", lambda: tmp_path)
+
+    assert seed_sandbox._load_prod_entities("customers") == [
+        {"Id": "active", "Active": True}
+    ]
+
+
+def test_repull_runs_before_sandbox_seed_pipeline(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeSandboxClient:
+        def close(self):
+            calls.append("close sandbox")
+
+    monkeypatch.setattr(
+        seed_sandbox,
+        "repull_prod_exports",
+        lambda *, only: calls.append(f"repull {only}") or {"status": "completed", "Customer": 2},
+    )
+    monkeypatch.setattr(
+        seed_sandbox,
+        "_build_client",
+        lambda env, _path: calls.append(f"build {env}") or FakeSandboxClient(),
+    )
+    monkeypatch.setattr(seed_sandbox, "load_state", lambda: {"Customer": {}, "Item": {}})
+    monkeypatch.setattr(seed_sandbox, "_load_prod_entities", lambda _name: [])
+
+    summary_path = tmp_path / "summary.json"
+    assert seed_sandbox.main(
+        ["--re-pull-prod", "--dry-run", "--only", "customers", "--summary", str(summary_path)]
+    ) == 0
+
+    assert calls == ["repull customers", "build sandbox", "close sandbox"]
+    assert json.loads(summary_path.read_text())["production_export"] == {
+        "status": "completed",
+        "Customer": 2,
     }

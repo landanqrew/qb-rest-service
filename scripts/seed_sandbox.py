@@ -5,10 +5,10 @@ One-off developer script. Not part of the runtime service.
 Prerequisites
 -------------
 1. Prod Customer + Item data exported to JSON at
-   ``~/qb-exports/prod/{customers,items}.json`` (full QBO entities). The
-   script reads prod from these files rather than querying prod live, so it
-   never holds a prod refresh token — no chance of rotating the token out
-   from under the deployed prod service.
+   ``~/qb-export/prod-<REALM_ID>/{customers,items}.json`` (full QBO entities). The
+   normal seed path reads only these files. ``--re-pull-prod`` refreshes them
+   first by using the Production credentials in ``.env.production`` and the
+   production token stored in Secret Manager.
 2. Sandbox tokens live at ``~/.config/qbsvc/tokens.sandbox.json`` (the
    QBClient's FileTokenStore layout — see ``qbsvc.auth.tokens.TokenData``).
    Populate them by connecting the sandbox realm through qb-admin-sandbox,
@@ -30,6 +30,7 @@ Usage
     uv run python scripts/seed_sandbox.py --dry-run
     uv run python scripts/seed_sandbox.py --only customers
     uv run python scripts/seed_sandbox.py --only items
+    uv run python scripts/seed_sandbox.py --re-pull-prod
 
 Behavior
 --------
@@ -45,6 +46,9 @@ Behavior
   seeded; ``--force`` is the explicit escape hatch. Each attempt writes a JSON
   summary (default ``scripts/seed-summary.json``) with counts and QBO faults.
 - Rate limiting is handled by ``QBClient``'s existing TokenBucket.
+- ``--re-pull-prod`` overwrites the selected production exports before the
+  sandbox pipeline begins. It needs Application Default Credentials with read
+  access to the production token secret.
 """
 
 from __future__ import annotations
@@ -71,10 +75,11 @@ from qbsvc.exceptions import APIError, RateLimitError  # noqa: E402
 
 TOKEN_DIR = Path.home() / ".config" / "qbsvc"
 SANDBOX_TOKEN_PATH = TOKEN_DIR / "tokens.sandbox.json"
-EXPORT_DIR = Path.home() / "qb-exports" / "prod"
+EXPORT_ROOT = Path.home() / "qb-export"
 STATE_PATH = _REPO_ROOT / "scripts" / ".seed_state.json"
 
 ENV_FILES = {
+    "production": _REPO_ROOT / ".env.production",
     "sandbox": _REPO_ROOT / ".env.sandbox",
 }
 
@@ -119,6 +124,7 @@ class RunSummary:
 
     def __init__(self, *, dry_run: bool) -> None:
         self.dry_run = dry_run
+        self.production_export: dict[str, object] = {"status": "not_requested"}
         self.preflight: dict[str, object] = {"status": "not_run"}
         self._entities = {
             "Customer": {"read": 0, "planned": 0, "created": 0, "skipped": []},
@@ -161,6 +167,7 @@ class RunSummary:
         }
         return {
             "dry_run": self.dry_run,
+            "production_export": self.production_export,
             "preflight": self.preflight,
             "entities": entities,
             "totals": {
@@ -283,6 +290,87 @@ def _load_creds(env: str) -> tuple[str, str]:
     return client_id, client_secret
 
 
+def production_realm_id() -> str:
+    """Read the production realm ID without loading its token or credentials."""
+    path = ENV_FILES["production"]
+    if not path.exists():
+        raise SystemExit(
+            f"Missing {path.name}. It must define QBSVC_REALM_ID or REALM_ID "
+            "to locate the production export directory."
+        )
+    values = dotenv_values(path)
+    realm_id = values.get("QBSVC_REALM_ID") or values.get("REALM_ID") or ""
+    if not realm_id:
+        raise SystemExit(f"{path.name} is missing QBSVC_REALM_ID or REALM_ID.")
+    return realm_id
+
+
+def production_export_dir() -> Path:
+    """Return the realm-namespaced directory holding production exports."""
+    return EXPORT_ROOT / f"prod-{production_realm_id()}"
+
+
+def production_export_config() -> dict[str, str]:
+    """Read the production OAuth and Secret Manager configuration.
+
+    Both the service-form ``QBSVC_*`` names and the deployment-script aliases
+    are accepted so an existing ``.env.production`` can drive this tool without
+    copying sensitive values into a second file.
+    """
+    client_id, client_secret = _load_creds("production")
+    values = dotenv_values(ENV_FILES["production"])
+    gcp_project = values.get("QBSVC_GCP_PROJECT") or values.get("GCP_PROJECT") or ""
+    token_secret = (
+        values.get("QBSVC_SECRET_NAME_TOKENS")
+        or values.get("SECRET_TOKENS")
+        or ""
+    )
+    missing = [
+        name
+        for name, value in {
+            "QBSVC_GCP_PROJECT or GCP_PROJECT": gcp_project,
+            "QBSVC_SECRET_NAME_TOKENS or SECRET_TOKENS": token_secret,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise SystemExit(
+            f"{ENV_FILES['production'].name} is missing {', '.join(missing)}."
+        )
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "gcp_project": gcp_project,
+        "token_secret": token_secret,
+        "realm_id": production_realm_id(),
+    }
+
+
+def _build_production_export_client() -> QBClient:
+    """Build the short-lived production client used only by --re-pull-prod."""
+    config = production_export_config()
+    try:
+        from google.cloud import secretmanager
+    except ImportError as exc:
+        raise SystemExit(
+            "--re-pull-prod requires the gcp extra: uv sync --extra gcp"
+        ) from exc
+
+    from qbsvc.auth.secret_manager import SecretManagerTokenStore
+
+    token_store = SecretManagerTokenStore(
+        project_id=config["gcp_project"],
+        secret_name=config["token_secret"],
+        client=secretmanager.SecretManagerServiceClient(),
+    )
+    settings = Settings(
+        intuit_environment="production",
+        intuit_client_id=config["client_id"],
+        intuit_client_secret=config["client_secret"],
+    )
+    return QBClient(token_store, settings=settings)
+
+
 def _build_client(env: str, token_path: Path) -> QBClient:
     if not token_path.exists():
         raise SystemExit(
@@ -314,7 +402,7 @@ def _load_prod_entities(name: str) -> list[dict]:
     Active records to match the original ``SELECT ... WHERE Active = true``
     behavior; the export itself includes inactive rows.
     """
-    path = EXPORT_DIR / f"{name}.json"
+    path = production_export_dir() / f"{name}.json"
     if not path.exists():
         raise SystemExit(
             f"Missing prod export {path}. Produce it first with the read-only "
@@ -410,6 +498,48 @@ def _paginated_query(client: QBClient, entity: str, where: str = "") -> list[dic
         if len(batch) < page:
             return results
         start += page
+
+
+def repull_prod_exports(*, only: str | None = None) -> dict[str, object]:
+    """Refresh production exports before the sandbox seed pipeline starts.
+
+    Read both active and inactive source rows so the on-disk exports remain
+    complete. ``_load_prod_entities`` still applies the existing active-only
+    policy for the subsequent sandbox create phase. All reads finish before
+    any file is replaced, preventing a partial refresh when one QBO query
+    fails.
+    """
+    targets = {
+        "customers": "Customer",
+        "items": "Item",
+    }
+    if only is not None:
+        targets = {only: targets[only]}
+
+    client = _build_production_export_client()
+    try:
+        exports = {
+            filename: _paginated_query(
+                client, entity, "Active IN (true, false)"
+            )
+            for filename, entity in targets.items()
+        }
+    finally:
+        client.close()
+
+    export_dir = production_export_dir()
+    export_dir.mkdir(parents=True, exist_ok=True)
+    for filename, rows in exports.items():
+        path = export_dir / f"{filename}.json"
+        temporary_path = path.with_suffix(".json.tmp")
+        temporary_path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
+        temporary_path.replace(path)
+
+    result: dict[str, object] = {"status": "completed"}
+    for filename, rows in exports.items():
+        result[targets[filename]] = len(rows)
+    _log.info("production_exports_refreshed counts=%s", result)
+    return result
 
 
 def _topo_sort(entities: list[dict], parent_key: str = "ParentRef") -> list[dict]:
@@ -769,6 +899,14 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=_REPO_ROOT / "scripts" / "seed-summary.json",
         help="Write a JSON run summary here (default: scripts/seed-summary.json).",
     )
+    p.add_argument(
+        "--re-pull-prod",
+        action="store_true",
+        help=(
+            "Refresh selected prod exports through Secret Manager before "
+            "seeding. Requires .env.production and ADC."
+        ),
+    )
     return p.parse_args(list(argv) if argv is not None else None)
 
 
@@ -779,9 +917,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     args = _parse_args(argv)
 
-    sandbox = _build_client("sandbox", SANDBOX_TOKEN_PATH)
     summary = RunSummary(dry_run=args.dry_run)
+    sandbox: QBClient | None = None
     try:
+        if args.re_pull_prod:
+            summary.production_export = {"status": "started"}
+            try:
+                summary.production_export = repull_prod_exports(only=args.only)
+            except (Exception, SystemExit) as exc:
+                summary.production_export = {"status": "failed", "reason": str(exc)}
+                raise
+
+        sandbox = _build_client("sandbox", SANDBOX_TOKEN_PATH)
         state = load_state()
 
         if args.dry_run:
@@ -823,7 +970,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         _log.error("seed_preflight_failed reason=%s", exc)
         return 2
     finally:
-        sandbox.close()
+        if sandbox is not None:
+            sandbox.close()
         write_summary(summary, args.summary)
     return 0
 

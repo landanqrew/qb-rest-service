@@ -78,7 +78,7 @@
   <!-- Inputs -->
   <text x="710" y="28" class="s">1 · INVOCATION AND LOCAL INPUTS</text>
   <rect class="in" x="55" y="52" width="240" height="74" rx="9"/><text class="t" x="175" y="82">CLI arguments</text><text class="s" x="175" y="104">--only · --dry-run · --limit</text><text class="s" x="175" y="119">--force · --seed-threshold · --summary</text>
-  <rect class="in" x="370" y="52" width="240" height="74" rx="9"/><text class="t" x="490" y="82">Production exports</text><text class="s" x="490" y="104">~/qb-exports/prod/</text><text class="s" x="490" y="119">customers.json · items.json</text>
+  <rect class="in" x="370" y="52" width="240" height="74" rx="9"/><text class="t" x="490" y="82">Production exports</text><text class="s" x="490" y="104">~/qb-export/prod-&lt;REALM_ID&gt;/</text><text class="s" x="490" y="119">customers.json · items.json</text>
   <rect class="in" x="685" y="52" width="240" height="74" rx="9"/><text class="t" x="805" y="82">Sandbox auth files</text><text class="s" x="805" y="104">.env.sandbox credentials</text><text class="s" x="805" y="119">tokens.sandbox.json</text>
   <rect class="in" x="1000" y="52" width="240" height="74" rx="9"/><text class="t" x="1120" y="82">Local state</text><text class="s" x="1120" y="104">scripts/.seed_state.json</text><text class="s" x="1120" y="119">prod ID → sandbox ID</text>
   <path class="a" d="M175 126 V176 H710"/><path class="a" d="M490 126 V176"/><path class="a" d="M805 126 V176"/><path class="a" d="M1120 126 V176 H710"/>
@@ -130,7 +130,7 @@
 </svg>
 </section>
 
-<div class="callout"><strong>Boundary worth preserving:</strong> the script obtains source data from exported JSON, not a live production client. That means the only OAuth tokens it ever loads or refreshes belong to the sandbox.</div>
+<div class="callout"><strong>Production boundary:</strong> normal seed runs read only the realm-namespaced export files. With <code>--re-pull-prod</code>, the script first creates a short-lived production client using <code>.env.production</code> plus the production token in Secret Manager, overwrites those exports, closes that client, and only then begins the sandbox pipeline.</div>
 
 <section class="grid">
   <article class="card">
@@ -171,6 +171,12 @@
   <summary>QBO call and failure handling</summary>
   <div>
     <p>Writes are paced by <code>SANDBOX_WRITE_DELAY_SEC</code> and pass through <code>_post_with_retry()</code>. Rate-limit and transient server responses are retried with exponential backoff. A deterministic <code>APIError</code> records its HTTP status, <code>Fault.Error[]</code> code/message, and <code>intuit_tid</code> in the summary before the script moves to the next record. A successful QBO response must contain the created entity ID before the state map is updated.</p>
+  </div>
+</details>
+<details>
+  <summary>Optional production export refresh</summary>
+  <div>
+    <p><code>--re-pull-prod</code> runs before sandbox authentication and preflight. It reads the production realm ID from <code>QBSVC_REALM_ID</code> or <code>REALM_ID</code> in <code>.env.production</code>, then overwrites <code>~/qb-export/prod-&lt;REALM_ID&gt;/customers.json</code> and <code>items.json</code>. The same file must provide production Intuit client credentials plus either <code>QBSVC_GCP_PROJECT</code>/<code>QBSVC_SECRET_NAME_TOKENS</code> or the deploy aliases <code>GCP_PROJECT</code>/<code>SECRET_TOKENS</code>. The flag needs Application Default Credentials that can read the production token secret and <code>uv sync --extra gcp</code>.</p>
   </div>
 </details>
 
