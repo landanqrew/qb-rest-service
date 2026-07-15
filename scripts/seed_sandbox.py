@@ -5,10 +5,10 @@ One-off developer script. Not part of the runtime service.
 Prerequisites
 -------------
 1. Prod Customer + Item data exported to JSON at
-   ``~/qb-exports/prod/{customers,items}.json`` (full QBO entities). The
-   script reads prod from these files rather than querying prod live, so it
-   never holds a prod refresh token — no chance of rotating the token out
-   from under the deployed prod service.
+   ``~/qb-export/prod-<REALM_ID>/{customers,items}.json`` (full QBO entities). The
+   normal seed path reads only these files. ``--re-pull-prod`` refreshes them
+   first by using the Production credentials in ``.env.production`` and the
+   production token stored in Secret Manager.
 2. Sandbox tokens live at ``~/.config/qbsvc/tokens.sandbox.json`` (the
    QBClient's FileTokenStore layout — see ``qbsvc.auth.tokens.TokenData``).
    Populate them by connecting the sandbox realm through qb-admin-sandbox,
@@ -30,6 +30,7 @@ Usage
     uv run python scripts/seed_sandbox.py --dry-run
     uv run python scripts/seed_sandbox.py --only customers
     uv run python scripts/seed_sandbox.py --only items
+    uv run python scripts/seed_sandbox.py --re-pull-prod
 
 Behavior
 --------
@@ -41,7 +42,13 @@ Behavior
   refs.
 - Idempotent: ``scripts/.seed_state.json`` records ``{prod_id: sandbox_id}``
   per entity so reruns skip already-copied records.
+- Create runs abort before writing when the sandbox has likely already been
+  seeded; ``--force`` is the explicit escape hatch. Each attempt writes a JSON
+  summary (default ``scripts/seed-summary.json``) with counts and QBO faults.
 - Rate limiting is handled by ``QBClient``'s existing TokenBucket.
+- ``--re-pull-prod`` overwrites the selected production exports before the
+  sandbox pipeline begins. It needs Application Default Credentials with read
+  access to the production token secret.
 """
 
 from __future__ import annotations
@@ -68,10 +75,11 @@ from qbsvc.exceptions import APIError, RateLimitError  # noqa: E402
 
 TOKEN_DIR = Path.home() / ".config" / "qbsvc"
 SANDBOX_TOKEN_PATH = TOKEN_DIR / "tokens.sandbox.json"
-EXPORT_DIR = Path.home() / "qb-exports" / "prod"
+EXPORT_ROOT = Path.home() / "qb-export"
 STATE_PATH = _REPO_ROOT / "scripts" / ".seed_state.json"
 
 ENV_FILES = {
+    "production": _REPO_ROOT / ".env.production",
     "sandbox": _REPO_ROOT / ".env.sandbox",
 }
 
@@ -95,6 +103,84 @@ _TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 _log = logging.getLogger("seed_sandbox")
 
+DEFAULT_SEED_THRESHOLD = 50
+EXIT_FAILURE = 1
+EXIT_NOT_FRESH = 2
+
+
+class SandboxNotFreshError(RuntimeError):
+    """The target does not look safe for a create-only seed run."""
+
+
+class HierarchyError(RuntimeError):
+    """The exported data contains a parent-reference cycle."""
+
+
+class RunSummary:
+    """JSON-serializable account of one seed attempt.
+
+    The state file remains the durable idempotency mechanism. This summary is
+    intentionally an operator-facing audit record: what was considered, what
+    was created, and why a record was skipped.
+    """
+
+    def __init__(self, *, dry_run: bool) -> None:
+        self.dry_run = dry_run
+        self.production_export: dict[str, object] = {"status": "not_requested"}
+        self.preflight: dict[str, object] = {"status": "not_run"}
+        self.failure: dict[str, object] = {"status": "none"}
+        self._entities = {
+            "Customer": {"read": 0, "planned": 0, "created": 0, "skipped": []},
+            "Item": {"read": 0, "planned": 0, "created": 0, "skipped": []},
+        }
+
+    def record_read(self, entity: str, count: int) -> None:
+        self._entities[entity]["read"] = count
+
+    def record_created(self, entity: str) -> None:
+        self._entities[entity]["created"] += 1
+
+    def record_planned(self, entity: str) -> None:
+        self._entities[entity]["planned"] += 1
+
+    def record_skip(
+        self,
+        entity: str,
+        *,
+        prod_id: str,
+        name: str,
+        reason: str,
+        qbo: dict[str, object] | None = None,
+    ) -> None:
+        skipped: list[dict[str, object]] = self._entities[entity]["skipped"]
+        entry: dict[str, object] = {"id": prod_id, "name": name, "reason": reason}
+        if qbo:
+            entry["qbo"] = qbo
+        skipped.append(entry)
+
+    def to_dict(self) -> dict[str, object]:
+        entities = {
+            entity: {
+                "read": result["read"],
+                "planned": result["planned"],
+                "created": result["created"],
+                "skipped": list(result["skipped"]),
+            }
+            for entity, result in self._entities.items()
+        }
+        return {
+            "dry_run": self.dry_run,
+            "production_export": self.production_export,
+            "preflight": self.preflight,
+            "failure": self.failure,
+            "entities": entities,
+            "totals": {
+                "created": sum(result["created"] for result in self._entities.values()),
+                "planned": sum(result["planned"] for result in self._entities.values()),
+                "skipped": sum(len(result["skipped"]) for result in self._entities.values()),
+            },
+        }
+
 
 # --------------------------------------------------------------------------- #
 # State
@@ -113,6 +199,68 @@ def load_state() -> dict[str, dict[str, str]]:
 def save_state(state: dict[str, dict[str, str]]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def check_target_fresh(
+    sandbox: QBClient,
+    state: dict[str, dict[str, str]],
+    *,
+    seed_threshold: int = DEFAULT_SEED_THRESHOLD,
+    force: bool = False,
+) -> dict[str, object]:
+    """Refuse a create-only run against a likely already-seeded sandbox.
+
+    QBO's reset sandbox includes a baseline chart of accounts, so Accounts are
+    deliberately not part of this check. Customers and Items are the entities
+    this script creates. Existing local state is also unsafe: after an Intuit
+    reset it would point at obsolete target IDs and silently skip the new run.
+    """
+    existing = {
+        entity: len(state.get(entity, {}))
+        for entity in ("Customer", "Item")
+    }
+    if any(existing.values()) and not force:
+        raise SandboxNotFreshError(
+            "Existing seed state was found. Refusing to add records because the "
+            "target may already be seeded. After intentionally resetting the "
+            "sandbox, remove scripts/.seed_state.json and rerun; otherwise use "
+            "--force only when duplicate records are acceptable."
+        )
+
+    customer_count = len(
+        _paginated_query(sandbox, "Customer", "Active IN (true, false)")
+    )
+    item_count = len(_paginated_query(sandbox, "Item", "Active IN (true, false)"))
+    result: dict[str, object] = {
+        "customer_count": customer_count,
+        "item_count": item_count,
+        "threshold": seed_threshold,
+        "forced": force,
+    }
+    if force:
+        result["status"] = "forced"
+        return result
+    if customer_count <= seed_threshold and item_count <= seed_threshold:
+        result["status"] = "passed"
+        return result
+
+    entity, count = (
+        ("Customer", customer_count)
+        if customer_count > seed_threshold
+        else ("Item", item_count)
+    )
+    raise SandboxNotFreshError(
+        f"Target sandbox is not fresh: {entity} count = {count}, threshold = "
+        f"{seed_threshold}. Clear Data and Reset it in the Intuit Developer "
+        "Portal, remove scripts/.seed_state.json, then rerun. Use --force only "
+        "when duplicate records are acceptable."
+    )
+
+
+def write_summary(summary: RunSummary, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary.to_dict(), indent=2, sort_keys=True) + "\n")
+    _log.info("seed_summary_written path=%s", path)
 
 
 # --------------------------------------------------------------------------- #
@@ -146,6 +294,87 @@ def _load_creds(env: str) -> tuple[str, str]:
     return client_id, client_secret
 
 
+def production_realm_id() -> str:
+    """Read the production realm ID without loading its token or credentials."""
+    path = ENV_FILES["production"]
+    if not path.exists():
+        raise SystemExit(
+            f"Missing {path.name}. It must define QBSVC_REALM_ID or REALM_ID "
+            "to locate the production export directory."
+        )
+    values = dotenv_values(path)
+    realm_id = values.get("QBSVC_REALM_ID") or values.get("REALM_ID") or ""
+    if not realm_id:
+        raise SystemExit(f"{path.name} is missing QBSVC_REALM_ID or REALM_ID.")
+    return realm_id
+
+
+def production_export_dir() -> Path:
+    """Return the realm-namespaced directory holding production exports."""
+    return EXPORT_ROOT / f"prod-{production_realm_id()}"
+
+
+def production_export_config() -> dict[str, str]:
+    """Read the production OAuth and Secret Manager configuration.
+
+    Both the service-form ``QBSVC_*`` names and the deployment-script aliases
+    are accepted so an existing ``.env.production`` can drive this tool without
+    copying sensitive values into a second file.
+    """
+    client_id, client_secret = _load_creds("production")
+    values = dotenv_values(ENV_FILES["production"])
+    gcp_project = values.get("QBSVC_GCP_PROJECT") or values.get("GCP_PROJECT") or ""
+    token_secret = (
+        values.get("QBSVC_SECRET_NAME_TOKENS")
+        or values.get("SECRET_TOKENS")
+        or ""
+    )
+    missing = [
+        name
+        for name, value in {
+            "QBSVC_GCP_PROJECT or GCP_PROJECT": gcp_project,
+            "QBSVC_SECRET_NAME_TOKENS or SECRET_TOKENS": token_secret,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise SystemExit(
+            f"{ENV_FILES['production'].name} is missing {', '.join(missing)}."
+        )
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "gcp_project": gcp_project,
+        "token_secret": token_secret,
+        "realm_id": production_realm_id(),
+    }
+
+
+def _build_production_export_client() -> QBClient:
+    """Build the short-lived production client used only by --re-pull-prod."""
+    config = production_export_config()
+    try:
+        from google.cloud import secretmanager
+    except ImportError as exc:
+        raise SystemExit(
+            "--re-pull-prod requires the gcp extra: uv sync --extra gcp"
+        ) from exc
+
+    from qbsvc.auth.secret_manager import SecretManagerTokenStore
+
+    token_store = SecretManagerTokenStore(
+        project_id=config["gcp_project"],
+        secret_name=config["token_secret"],
+        client=secretmanager.SecretManagerServiceClient(),
+    )
+    settings = Settings(
+        intuit_environment="production",
+        intuit_client_id=config["client_id"],
+        intuit_client_secret=config["client_secret"],
+    )
+    return QBClient(token_store, settings=settings)
+
+
 def _build_client(env: str, token_path: Path) -> QBClient:
     if not token_path.exists():
         raise SystemExit(
@@ -177,7 +406,7 @@ def _load_prod_entities(name: str) -> list[dict]:
     Active records to match the original ``SELECT ... WHERE Active = true``
     behavior; the export itself includes inactive rows.
     """
-    path = EXPORT_DIR / f"{name}.json"
+    path = production_export_dir() / f"{name}.json"
     if not path.exists():
         raise SystemExit(
             f"Missing prod export {path}. Produce it first with the read-only "
@@ -230,6 +459,30 @@ def _post_with_retry(
     raise RuntimeError("unreachable")  # last attempt always returns or raises
 
 
+def _qbo_diagnostics(error: APIError) -> dict[str, object]:
+    """Extract the fault details an operator needs to investigate a skip."""
+    details: dict[str, object] = {
+        "status": error.status_code,
+        "detail": error.detail,
+    }
+    if error.intuit_tid:
+        details["intuit_tid"] = error.intuit_tid
+    if isinstance(error.raw, dict):
+        fault = error.raw.get("Fault")
+        if isinstance(fault, dict):
+            errors = [
+                {
+                    "code": str(item.get("code", "")),
+                    "message": item.get("Message", "") or item.get("Detail", ""),
+                }
+                for item in fault.get("Error", [])
+                if isinstance(item, dict)
+            ]
+            if errors:
+                details["errors"] = errors
+    return details
+
+
 def _paginated_query(client: QBClient, entity: str, where: str = "") -> list[dict]:
     """Page through ``SELECT * FROM <entity>`` with STARTPOSITION/MAXRESULTS.
 
@@ -249,6 +502,48 @@ def _paginated_query(client: QBClient, entity: str, where: str = "") -> list[dic
         if len(batch) < page:
             return results
         start += page
+
+
+def repull_prod_exports(*, only: str | None = None) -> dict[str, object]:
+    """Refresh production exports before the sandbox seed pipeline starts.
+
+    Read both active and inactive source rows so the on-disk exports remain
+    complete. ``_load_prod_entities`` still applies the existing active-only
+    policy for the subsequent sandbox create phase. All reads finish before
+    any file is replaced, preventing a partial refresh when one QBO query
+    fails.
+    """
+    targets = {
+        "customers": "Customer",
+        "items": "Item",
+    }
+    if only is not None:
+        targets = {only: targets[only]}
+
+    client = _build_production_export_client()
+    try:
+        exports = {
+            filename: _paginated_query(
+                client, entity, "Active IN (true, false)"
+            )
+            for filename, entity in targets.items()
+        }
+    finally:
+        client.close()
+
+    export_dir = production_export_dir()
+    export_dir.mkdir(parents=True, exist_ok=True)
+    for filename, rows in exports.items():
+        path = export_dir / f"{filename}.json"
+        temporary_path = path.with_suffix(".json.tmp")
+        temporary_path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
+        temporary_path.replace(path)
+
+    result: dict[str, object] = {"status": "completed"}
+    for filename, rows in exports.items():
+        result[targets[filename]] = len(rows)
+    _log.info("production_exports_refreshed counts=%s", result)
+    return result
 
 
 def _topo_sort(entities: list[dict], parent_key: str = "ParentRef") -> list[dict]:
@@ -284,12 +579,11 @@ def _topo_sort(entities: list[dict], parent_key: str = "ParentRef") -> list[dict
                 next_round.append(e)
         remaining = next_round
         if not progress:
-            _log.warning(
-                "topo_sort_cycle_or_orphan count=%d — appending as-is",
-                len(remaining),
+            ids = [str(entity.get("Id", "")) for entity in remaining]
+            raise HierarchyError(
+                "ParentRef cycle detected in the source export; refusing to "
+                f"create unordered records: {', '.join(ids)}"
             )
-            ordered.extend(remaining)
-            break
     return ordered
 
 
@@ -304,8 +598,11 @@ def seed_customers(
     state: dict[str, dict[str, str]],
     dry_run: bool,
     limit: int | None = None,
+    summary: RunSummary | None = None,
 ) -> None:
     _log.info("prod customers loaded count=%d", len(customers))
+    if summary is not None:
+        summary.record_read("Customer", len(customers))
 
     ordered = _topo_sort(customers)
     if limit is not None:
@@ -316,6 +613,13 @@ def seed_customers(
     for c in ordered:
         prod_id = c["Id"]
         if prod_id in customer_map:
+            if summary is not None:
+                summary.record_skip(
+                    "Customer",
+                    prod_id=prod_id,
+                    name=c.get("DisplayName", ""),
+                    reason="already recorded in seed state",
+                )
             continue
 
         payload = _strip(c)
@@ -339,6 +643,8 @@ def seed_customers(
 
         if dry_run:
             customer_map[prod_id] = f"dry_run_{prod_id}"
+            if summary is not None:
+                summary.record_planned("Customer")
             _log.info("dry_run customer prod_id=%s name=%s", prod_id, c.get("DisplayName"))
             continue
 
@@ -346,22 +652,41 @@ def seed_customers(
         try:
             resp = _post_with_retry(sandbox, "customer", payload)
         except APIError as e:
+            diagnostics = _qbo_diagnostics(e)
+            if summary is not None:
+                summary.record_skip(
+                    "Customer",
+                    prod_id=prod_id,
+                    name=c.get("DisplayName", ""),
+                    reason=e.detail,
+                    qbo=diagnostics,
+                )
             _log.error(
-                "customer_create_failed prod_id=%s name=%s status=%s detail=%s",
+                "customer_create_failed prod_id=%s name=%s status=%s detail=%s intuit_tid=%s",
                 prod_id,
                 c.get("DisplayName"),
                 e.status_code,
                 e.detail,
+                e.intuit_tid,
             )
             continue
 
         sandbox_id = resp.get("Customer", {}).get("Id")
         if not sandbox_id:
+            if summary is not None:
+                summary.record_skip(
+                    "Customer",
+                    prod_id=prod_id,
+                    name=c.get("DisplayName", ""),
+                    reason="QBO create response did not contain an Id",
+                )
             _log.error("customer_create_missing_id prod_id=%s resp=%s", prod_id, resp)
             continue
 
         customer_map[prod_id] = sandbox_id
         save_state(state)
+        if summary is not None:
+            summary.record_created("Customer")
         _log.info("customer_created prod_id=%s sandbox_id=%s", prod_id, sandbox_id)
 
 
@@ -408,11 +733,14 @@ def seed_items(
     state: dict[str, dict[str, str]],
     dry_run: bool,
     limit: int | None = None,
+    summary: RunSummary | None = None,
 ) -> None:
     account_map = _sandbox_account_map(sandbox)
     _log.info("sandbox accounts loaded count=%d", len(account_map))
 
     _log.info("prod items loaded count=%d", len(items))
+    if summary is not None:
+        summary.record_read("Item", len(items))
 
     ordered = _topo_sort(items)
     if limit is not None:
@@ -423,11 +751,25 @@ def seed_items(
     for it in ordered:
         prod_id = it["Id"]
         if prod_id in item_map:
+            if summary is not None:
+                summary.record_skip(
+                    "Item",
+                    prod_id=prod_id,
+                    name=it.get("Name", ""),
+                    reason="already recorded in seed state",
+                )
             continue
 
         payload = _strip(it)
         item_type = payload.get("Type")
         if item_type not in SUPPORTED_ITEM_TYPES:
+            if summary is not None:
+                summary.record_skip(
+                    "Item",
+                    prod_id=prod_id,
+                    name=it.get("Name", ""),
+                    reason=f"unsupported item type: {item_type}",
+                )
             _log.info(
                 "item_skipped_unsupported_type prod_id=%s name=%s type=%s",
                 prod_id,
@@ -452,6 +794,13 @@ def seed_items(
 
         ok, missing = _remap_account_refs(payload, account_map)
         if not ok:
+            if summary is not None:
+                summary.record_skip(
+                    "Item",
+                    prod_id=prod_id,
+                    name=it.get("Name", ""),
+                    reason=f"missing sandbox accounts: {', '.join(missing)}",
+                )
             _log.warning(
                 "item_skipped_missing_accounts prod_id=%s name=%s missing=%s",
                 prod_id,
@@ -462,6 +811,8 @@ def seed_items(
 
         if dry_run:
             item_map[prod_id] = f"dry_run_{prod_id}"
+            if summary is not None:
+                summary.record_planned("Item")
             _log.info(
                 "dry_run item prod_id=%s name=%s type=%s",
                 prod_id,
@@ -474,22 +825,41 @@ def seed_items(
         try:
             resp = _post_with_retry(sandbox, "item", payload)
         except APIError as e:
+            diagnostics = _qbo_diagnostics(e)
+            if summary is not None:
+                summary.record_skip(
+                    "Item",
+                    prod_id=prod_id,
+                    name=it.get("Name", ""),
+                    reason=e.detail,
+                    qbo=diagnostics,
+                )
             _log.error(
-                "item_create_failed prod_id=%s name=%s status=%s detail=%s",
+                "item_create_failed prod_id=%s name=%s status=%s detail=%s intuit_tid=%s",
                 prod_id,
                 it.get("Name"),
                 e.status_code,
                 e.detail,
+                e.intuit_tid,
             )
             continue
 
         sandbox_id = resp.get("Item", {}).get("Id")
         if not sandbox_id:
+            if summary is not None:
+                summary.record_skip(
+                    "Item",
+                    prod_id=prod_id,
+                    name=it.get("Name", ""),
+                    reason="QBO create response did not contain an Id",
+                )
             _log.error("item_create_missing_id prod_id=%s resp=%s", prod_id, resp)
             continue
 
         item_map[prod_id] = sandbox_id
         save_state(state)
+        if summary is not None:
+            summary.record_created("Item")
         _log.info("item_created prod_id=%s sandbox_id=%s", prod_id, sandbox_id)
 
 
@@ -516,6 +886,31 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Cap creates per entity (after topo-sort). Use for a small test batch.",
     )
+    p.add_argument(
+        "--seed-threshold",
+        type=int,
+        default=DEFAULT_SEED_THRESHOLD,
+        help="Maximum Customers or Items allowed before a create run aborts.",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the target-sandbox safety check. Does not clear seed state.",
+    )
+    p.add_argument(
+        "--summary",
+        type=Path,
+        default=_REPO_ROOT / "scripts" / "seed-summary.json",
+        help="Write a JSON run summary here (default: scripts/seed-summary.json).",
+    )
+    p.add_argument(
+        "--re-pull-prod",
+        action="store_true",
+        help=(
+            "Refresh selected prod exports through Secret Manager before "
+            "seeding. Requires .env.production and ADC."
+        ),
+    )
     return p.parse_args(list(argv) if argv is not None else None)
 
 
@@ -526,17 +921,47 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     args = _parse_args(argv)
 
-    sandbox = _build_client("sandbox", SANDBOX_TOKEN_PATH)
+    summary = RunSummary(dry_run=args.dry_run)
+    sandbox: QBClient | None = None
     try:
+        if args.re_pull_prod:
+            summary.production_export = {"status": "started"}
+            try:
+                summary.production_export = repull_prod_exports(only=args.only)
+            except (Exception, SystemExit) as exc:
+                summary.production_export = {"status": "failed", "reason": str(exc)}
+                raise
+
+        sandbox = _build_client("sandbox", SANDBOX_TOKEN_PATH)
         state = load_state()
+
+        if args.dry_run:
+            summary.preflight = {"status": "skipped", "reason": "dry_run"}
+        else:
+            summary.preflight = check_target_fresh(
+                sandbox,
+                state,
+                seed_threshold=args.seed_threshold,
+                force=args.force,
+            )
 
         if args.only in (None, "customers"):
             seed_customers(
-                sandbox, _load_prod_entities("customers"), state, args.dry_run, args.limit
+                sandbox,
+                _load_prod_entities("customers"),
+                state,
+                args.dry_run,
+                args.limit,
+                summary,
             )
         if args.only in (None, "items"):
             seed_items(
-                sandbox, _load_prod_entities("items"), state, args.dry_run, args.limit
+                sandbox,
+                _load_prod_entities("items"),
+                state,
+                args.dry_run,
+                args.limit,
+                summary,
             )
 
         _log.info(
@@ -544,8 +969,20 @@ def main(argv: Iterable[str] | None = None) -> int:
             len(state["Customer"]),
             len(state["Item"]),
         )
+    except SandboxNotFreshError as exc:
+        summary.preflight = {"status": "failed", "reason": str(exc)}
+        _log.error("seed_preflight_failed reason=%s", exc)
+        return EXIT_NOT_FRESH
+    except HierarchyError as exc:
+        summary.failure = {"status": "failed", "kind": "hierarchy", "reason": str(exc)}
+        _log.error("seed_hierarchy_failed reason=%s", exc)
+        return EXIT_FAILURE
     finally:
-        sandbox.close()
+        try:
+            if sandbox is not None:
+                sandbox.close()
+        finally:
+            write_summary(summary, args.summary)
     return 0
 
 
