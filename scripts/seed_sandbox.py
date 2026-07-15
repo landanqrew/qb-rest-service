@@ -104,6 +104,8 @@ _TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 _log = logging.getLogger("seed_sandbox")
 
 DEFAULT_SEED_THRESHOLD = 50
+EXIT_FAILURE = 1
+EXIT_NOT_FRESH = 2
 
 
 class SandboxNotFreshError(RuntimeError):
@@ -126,6 +128,7 @@ class RunSummary:
         self.dry_run = dry_run
         self.production_export: dict[str, object] = {"status": "not_requested"}
         self.preflight: dict[str, object] = {"status": "not_run"}
+        self.failure: dict[str, object] = {"status": "none"}
         self._entities = {
             "Customer": {"read": 0, "planned": 0, "created": 0, "skipped": []},
             "Item": {"read": 0, "planned": 0, "created": 0, "skipped": []},
@@ -169,6 +172,7 @@ class RunSummary:
             "dry_run": self.dry_run,
             "production_export": self.production_export,
             "preflight": self.preflight,
+            "failure": self.failure,
             "entities": entities,
             "totals": {
                 "created": sum(result["created"] for result in self._entities.values()),
@@ -968,11 +972,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     except SandboxNotFreshError as exc:
         summary.preflight = {"status": "failed", "reason": str(exc)}
         _log.error("seed_preflight_failed reason=%s", exc)
-        return 2
+        return EXIT_NOT_FRESH
+    except HierarchyError as exc:
+        summary.failure = {"status": "failed", "kind": "hierarchy", "reason": str(exc)}
+        _log.error("seed_hierarchy_failed reason=%s", exc)
+        return EXIT_FAILURE
     finally:
-        if sandbox is not None:
-            sandbox.close()
-        write_summary(summary, args.summary)
+        try:
+            if sandbox is not None:
+                sandbox.close()
+        finally:
+            write_summary(summary, args.summary)
     return 0
 
 

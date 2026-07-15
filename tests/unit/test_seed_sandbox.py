@@ -196,6 +196,16 @@ def test_load_prod_entities_uses_realm_namespaced_export_directory(monkeypatch, 
     ]
 
 
+def test_topo_sort_raises_on_parent_cycle():
+    records = [
+        {"Id": "parent", "ParentRef": {"value": "child"}},
+        {"Id": "child", "ParentRef": {"value": "parent"}},
+    ]
+
+    with pytest.raises(seed_sandbox.HierarchyError, match="parent, child"):
+        seed_sandbox._topo_sort(records)
+
+
 def test_repull_runs_before_sandbox_seed_pipeline(monkeypatch, tmp_path):
     calls: list[str] = []
 
@@ -225,4 +235,53 @@ def test_repull_runs_before_sandbox_seed_pipeline(monkeypatch, tmp_path):
     assert json.loads(summary_path.read_text())["production_export"] == {
         "status": "completed",
         "Customer": 2,
+    }
+
+
+def test_hierarchy_failure_is_recorded_in_summary(monkeypatch, tmp_path):
+    class FakeSandboxClient:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(seed_sandbox, "_build_client", lambda *_args: FakeSandboxClient())
+    monkeypatch.setattr(seed_sandbox, "load_state", lambda: {"Customer": {}, "Item": {}})
+    monkeypatch.setattr(
+        seed_sandbox,
+        "_load_prod_entities",
+        lambda _name: [
+            {"Id": "parent", "ParentRef": {"value": "child"}},
+            {"Id": "child", "ParentRef": {"value": "parent"}},
+        ],
+    )
+
+    summary_path = tmp_path / "summary.json"
+    assert seed_sandbox.main(
+        ["--dry-run", "--only", "customers", "--summary", str(summary_path)]
+    ) == seed_sandbox.EXIT_FAILURE
+    assert json.loads(summary_path.read_text())["failure"] == {
+        "status": "failed",
+        "kind": "hierarchy",
+        "reason": "ParentRef cycle detected in the source export; refusing to create "
+        "unordered records: parent, child",
+    }
+
+
+def test_summary_is_written_when_sandbox_close_fails(monkeypatch, tmp_path):
+    class FailingSandboxClient:
+        def close(self):
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(seed_sandbox, "_build_client", lambda *_args: FailingSandboxClient())
+    monkeypatch.setattr(seed_sandbox, "load_state", lambda: {"Customer": {}, "Item": {}})
+    monkeypatch.setattr(seed_sandbox, "_load_prod_entities", lambda _name: [])
+
+    summary_path = tmp_path / "summary.json"
+    with pytest.raises(RuntimeError, match="close failed"):
+        seed_sandbox.main(
+            ["--dry-run", "--only", "customers", "--summary", str(summary_path)]
+        )
+
+    assert json.loads(summary_path.read_text())["preflight"] == {
+        "status": "skipped",
+        "reason": "dry_run",
     }
