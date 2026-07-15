@@ -22,13 +22,18 @@
 #                  byte-for-byte the redirect URI registered in the Intuit console
 #   REALM_ID     — Intuit realm (company) ID
 #   RETURN_URL   — consuming app URL to return the browser to after connect
+#   SECRET_TOKENS
+#                — Secret Manager secret containing rotated token JSON
+#   SECRET_CLIENT_ID
+#                — Secret Manager secret containing Intuit OAuth client ID
+#   SECRET_CLIENT_SECRET
+#                — Secret Manager secret containing Intuit OAuth client secret
+#   SECRET_ADMIN_LAUNCH
+#                — Secret Manager secret containing launch-token signing key
 #
 # Secret Manager secrets referenced (see deploy/iam-setup.md and
 # deploy/qb-admin-setup.md):
-#   mwl-qb-client-id       — Intuit OAuth client ID
-#   mwl-qb-client-secret   — Intuit OAuth client secret
-#   mwl-qb-tokens          — rotated token blob, SHARED with qb-service
-#   mwl-qb-admin-launch    — shared launch-token secret (also held by the app)
+#   SECRET_CLIENT_ID, SECRET_CLIENT_SECRET, SECRET_TOKENS, SECRET_ADMIN_LAUNCH
 #
 # This service deliberately does NOT set QBSVC_ADMIN_ALLOWLIST: an IAM email
 # allowlist is meaningless for a public service with no inbound JWT. The
@@ -80,23 +85,23 @@ spec:
             - name: QBSVC_OAUTH_REDIRECT_URI
               value: SERVICE_URL/admin/oauth/callback
             - name: QBSVC_SECRET_NAME_TOKENS
-              value: mwl-qb-tokens
+              value: SECRET_TOKENS
             - name: QBSVC_ADMIN_RETURN_URL
               value: RETURN_URL
             - name: QBSVC_INTUIT_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: mwl-qb-client-id
+                  name: SECRET_CLIENT_ID
                   key: latest
             - name: QBSVC_INTUIT_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: mwl-qb-client-secret
+                  name: SECRET_CLIENT_SECRET
                   key: latest
             - name: QBSVC_ADMIN_LAUNCH_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: mwl-qb-admin-launch
+                  name: SECRET_ADMIN_LAUNCH
                   key: latest
           resources:
             limits:

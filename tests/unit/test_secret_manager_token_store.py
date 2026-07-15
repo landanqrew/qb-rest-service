@@ -51,8 +51,8 @@ def _fake_client_with_versions(*payloads: dict) -> MagicMock:
 
 def _store(client: MagicMock) -> SecretManagerTokenStore:
     return SecretManagerTokenStore(
-        project_id="mwl-prod",
-        secret_name="mwl-qb-tokens",
+        project_id="test-project",
+        secret_name="test-token-secret",
         client=client,
     )
 
@@ -108,7 +108,7 @@ def test_save_writes_payload_as_json_blob():
 
     call = client.add_secret_version.call_args
     request = call.kwargs.get("request") or call.args[0]
-    assert request["parent"] == "projects/mwl-prod/secrets/mwl-qb-tokens"
+    assert request["parent"] == "projects/test-project/secrets/test-token-secret"
     payload = json.loads(request["payload"]["data"].decode("utf-8"))
     assert payload == {
         "access_token": "at",

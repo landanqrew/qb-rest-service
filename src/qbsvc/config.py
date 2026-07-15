@@ -20,8 +20,8 @@ class Settings(BaseSettings):
 
     token_backend: str = Field(default="file", pattern="^(file|secret_manager)$")
     gcp_project: str = Field(default="")
-    secret_name_tokens: str = Field(default="mwl-qb-tokens")
-    secret_name_client: str = Field(default="mwl-qb-client")
+    secret_name_tokens: str = Field(default="")
+    secret_name_client: str = Field(default="")
 
     # Full URL Intuit redirects to after consent. Must be registered in the
     # Intuit developer console and match what /admin/oauth/start sends.
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     enable_admin_routes: bool = Field(default=True)
 
     # Browser-safe OAuth bootstrap (issue #51). A shared secret used to sign
-    # short-lived "launch tokens": the consuming app (e.g. Sample Manager) mints
+    # short-lived "launch tokens": the consuming app (e.g. consuming app) mints
     # one for an authenticated admin and links its Connect-QuickBooks button to
     # /admin/oauth/start?launch=<token>. When set, /admin/oauth/{start,disconnect}
     # require a valid launch token, making the flow reachable from a plain

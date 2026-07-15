@@ -5,18 +5,26 @@
 # /readyz with QBSVC_ENABLE_ADMIN_ROUTES=false, so the browser OAuth admin
 # surface (/admin/oauth/*) is NOT hosted here. OAuth bootstrap runs on the
 # separate public qb-admin service — see deploy/qb-admin.deploy.sh and
-# deploy/qb-admin-setup.md. Both services share the same image and the same
-# mwl-qb-tokens secret.
+# deploy/qb-admin-setup.md. Both services share the same image and token
+# Secret Manager secret.
 #
 # Idempotent: re-running deploys a new revision. Routes 100% of traffic to the
 # new revision once /healthz passes the startup probe.
 #
-# Required env vars (export before running, or pass on the command line):
+# Required env vars (export before running, pass on the command line, or set
+# ENV_FILE=.env.production / ENV_FILE=.env.sandbox so this script loads them):
 #   GCP_PROJECT       GCP project ID hosting Cloud Run + Secret Manager
+#   REALM_ID          Intuit realm (company) ID
+#   SECRET_CLIENT_ID  Secret Manager secret containing Intuit OAuth client ID
+#   SECRET_CLIENT_SECRET
+#                     Secret Manager secret containing Intuit OAuth client secret
+#   SECRET_TOKENS     Secret Manager secret containing rotated token JSON
+#
+# Optional:
 #   REGION            Cloud Run region (default: us-central1)
 #   SERVICE           Cloud Run service name (default: qb-service)
 #   AR_REPO           Artifact Registry repo name (default: qb-service)
-#   REALM_ID          Intuit realm (company) ID for Martin Water Labs
+#   IMAGE_NAME        Artifact Registry image name (default: qb-service)
 #   RUNTIME_SA        Runtime service account email (default:
 #                       qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com)
 #   INTUIT_ENV        "production" or "sandbox" (default: production). Sandbox
@@ -27,20 +35,24 @@
 # Prerequisites (see deploy/iam-setup.md):
 #   - Artifact Registry repo ${AR_REPO} exists in ${REGION}
 #   - Runtime service account exists and has
-#       roles/secretmanager.secretAccessor on mwl-qb-client-id,
-#       mwl-qb-client-secret, and mwl-qb-tokens
-#   - Secrets mwl-qb-client-id and mwl-qb-client-secret already populated
-#   - Secret mwl-qb-tokens exists (can be empty; bootstrapped via the qb-admin
+#       roles/secretmanager.secretAccessor on ${SECRET_CLIENT_ID},
+#       ${SECRET_CLIENT_SECRET}, and ${SECRET_TOKENS}
+#   - Secrets ${SECRET_CLIENT_ID} and ${SECRET_CLIENT_SECRET} already populated
+#   - Secret ${SECRET_TOKENS} exists (can be empty; bootstrapped via the qb-admin
 #     service's /admin/oauth/start, not this IAM-locked data service)
 
 set -euo pipefail
 
+if [[ -n "${ENV_FILE:-}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
+
 GCP_PROJECT="${GCP_PROJECT:?GCP_PROJECT is required}"
 REALM_ID="${REALM_ID:?REALM_ID is required}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-qb-service}"
-AR_REPO="${AR_REPO:-qb-service}"
-RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
 INTUIT_ENV="${INTUIT_ENV:-production}"
 
 # Fail before the build/deploy cycle on a bad value — Settings would reject
@@ -51,8 +63,22 @@ if [[ ! "${INTUIT_ENV}" =~ ^(production|sandbox)$ ]]; then
   exit 1
 fi
 
+# Sandbox deploys to its own service so a sandbox rollout never overwrites the
+# production revision. An explicit SERVICE always overrides this default.
+if [[ "${INTUIT_ENV}" == "sandbox" ]]; then
+  SERVICE="${SERVICE:-qb-service-sandbox}"
+else
+  SERVICE="${SERVICE:-qb-service}"
+fi
+AR_REPO="${AR_REPO:-qb-service}"
+IMAGE_NAME="${IMAGE_NAME:-qb-service}"
+RUNTIME_SA="${RUNTIME_SA:-qb-service-runtime@${GCP_PROJECT}.iam.gserviceaccount.com}"
+SECRET_CLIENT_ID="${SECRET_CLIENT_ID:?SECRET_CLIENT_ID is required}"
+SECRET_CLIENT_SECRET="${SECRET_CLIENT_SECRET:?SECRET_CLIENT_SECRET is required}"
+SECRET_TOKENS="${SECRET_TOKENS:?SECRET_TOKENS is required}"
+
 GIT_SHA="$(git rev-parse --short HEAD)"
-IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${SERVICE}:${GIT_SHA}"
+IMAGE="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${IMAGE_NAME}:${GIT_SHA}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -84,8 +110,8 @@ DEPLOY_ARGS=(
   # IAM-locked service (issue #52). No QBSVC_ADMIN_ALLOWLIST or
   # QBSVC_OAUTH_REDIRECT_URI here — those are admin-surface concerns owned by
   # qb-admin. `^|^` sets `|` as the delimiter so values can contain commas.
-  "--set-env-vars=^|^QBSVC_ENABLE_ADMIN_ROUTES=false|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
-  --set-secrets="QBSVC_INTUIT_CLIENT_ID=mwl-qb-client-id:latest,QBSVC_INTUIT_CLIENT_SECRET=mwl-qb-client-secret:latest"
+  "--set-env-vars=^|^QBSVC_ENABLE_ADMIN_ROUTES=false|QBSVC_TOKEN_BACKEND=secret_manager|QBSVC_GCP_PROJECT=${GCP_PROJECT}|QBSVC_REALM_ID=${REALM_ID}|QBSVC_SECRET_NAME_TOKENS=${SECRET_TOKENS}|QBSVC_INTUIT_ENVIRONMENT=${INTUIT_ENV}"
+  --set-secrets="QBSVC_INTUIT_CLIENT_ID=${SECRET_CLIENT_ID}:latest,QBSVC_INTUIT_CLIENT_SECRET=${SECRET_CLIENT_SECRET}:latest"
 )
 
 echo "==> Deploying ${SERVICE} (IAM-locked data API; admin OAuth routes OFF)"
@@ -104,8 +130,8 @@ echo "  1. Verify: curl -H \"Authorization: Bearer \$(gcloud auth print-identity
 echo "     (503 NOT_AUTHENTICATED is expected until QuickBooks is connected.)"
 echo "  2. Connect QuickBooks via the qb-admin service — this data service does"
 echo "     NOT host the browser OAuth flow. Deploy it with deploy/qb-admin.deploy.sh"
-echo "     and follow deploy/qb-admin-setup.md. Both services share mwl-qb-tokens,"
+echo "     and follow deploy/qb-admin-setup.md. Both services share ${SECRET_TOKENS},"
 echo "     so a connect done on qb-admin is immediately visible here."
-echo "  3. Point Sample Manager at both URLs:"
+echo "  3. Point consuming app at both URLs:"
 echo "       QB_SERVICE_URL=${URL}"
 echo "       QB_OAUTH_START_URL=<qb-admin-url>/admin/oauth/start"

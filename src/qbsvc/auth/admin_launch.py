@@ -8,7 +8,7 @@ bootstrap surface (see ``deploy/qb-admin-setup.md``); this module is the
 capability that keeps that surface from being open to the whole internet.
 
 A **launch token** is a short-lived, HMAC-signed string minted by the consuming
-app (e.g. Sample Manager), which already authenticates its own admins. The
+app (e.g. consuming app), which already authenticates its own admins. The
 consuming app shares ``QBSVC_ADMIN_LAUNCH_SECRET`` with the bootstrap service
 and reproduces ``mint_launch_token`` server-side, then renders the button as a
 link to ``/admin/oauth/start?launch=<token>``. The bootstrap service verifies

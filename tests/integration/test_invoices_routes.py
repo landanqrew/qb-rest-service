@@ -487,7 +487,7 @@ def test_create_posts_customer_ref_and_doc_number_to_qbo(settings_env, token_sto
 
 
 def test_create_with_empty_lines_omits_line_array(settings_env, token_store):
-    """Phase 3 of the Lab Intake flow creates the invoice empty; passing
+    """Phase 3 of the consuming app flow creates the invoice empty; passing
     `lines: []` must not send a `Line: []` to QBO (QBO rejects empty Line
     arrays on Invoice create). An absent Line key is correct.
     """
@@ -564,7 +564,7 @@ def test_create_passes_optional_txn_date_and_memos(settings_env, token_store):
 
 def test_create_duplicate_doc_number_returns_409(settings_env, token_store):
     """Acceptance: Intuit error 6240 (Duplicate Document Number) → HTTP 409
-    with code QBO_DUPLICATE_DOCNUMBER. Lab Intake retries with the same
+    with code QBO_DUPLICATE_DOCNUMBER. Consuming App retries with the same
     deterministic DocNumber, so 409 is the natural-dedup signal.
     """
     def handler(request):

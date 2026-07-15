@@ -138,6 +138,7 @@ celerybeat.pid
 .env*
 !.env.example
 .envrc
+scripts/.seed_state.json
 .venv
 env/
 venv/

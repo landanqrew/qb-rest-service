@@ -2,7 +2,7 @@
 
 The OAuth handshake (`/admin/oauth/start` + `/admin/oauth/callback`) runs on
 the **qb-admin** service — a public, browser-safe companion that shares
-qb-service's image and its `mwl-qb-tokens` secret (issue #52). The deployed
+qb-service's image and its `${SECRET_TOKENS}` secret (issue #52). The deployed
 **qb-service** is IAM-locked and data-only (`QBSVC_ENABLE_ADMIN_ROUTES=false`),
 so it no longer hosts those routes. See
 [`qb-admin-setup.md`](qb-admin-setup.md) for the production browser flow; this
@@ -10,21 +10,21 @@ doc covers registering the Intuit callback and the local-forwarder bootstrap
 (§3a) that also writes the shared token secret. No CLI, no laptop browser
 callback, no manual Secret Manager edits in the normal case.
 
-## Deployed service URLs (2026-06-06, project `qrew-tech-1526597818524`)
+## Deployed service URLs
 
 | Service    | URL                                              | Notes                                        |
 | ---------- | ------------------------------------------------ | -------------------------------------------- |
-| qb-service | `https://qb-service-5htcalpr7a-uc.a.run.app`     | IAM-gated; sandbox env (`INTUIT_ENV=sandbox`) |
-| qb-pages   | `https://qb-pages-5htcalpr7a-uc.a.run.app`       | Public; host/EULA/privacy pages for Intuit   |
+| qb-service | `https://qb-service-HASH-REGION.a.run.app`     | IAM-gated; sandbox env (`INTUIT_ENV=sandbox`) |
+| qb-pages   | `https://qb-pages-HASH-REGION.a.run.app`       | Public; host/EULA/privacy pages for Intuit   |
 
 OAuth redirect URI registered with Intuit:
-`https://qb-service-5htcalpr7a-uc.a.run.app/admin/oauth/callback`
+`https://qb-service-HASH-REGION.a.run.app/admin/oauth/callback`
 
 > First time deploying to Cloud Run? Walk through
 > [`iam-setup.md`](iam-setup.md) first — it stands up the runtime
 > service account and the three Secret Manager secrets this doc
-> references (`mwl-qb-client-id`, `mwl-qb-client-secret`,
-> `mwl-qb-tokens`). Then `deploy/deploy.sh` builds and deploys the
+> references (`${SECRET_CLIENT_ID}`, `${SECRET_CLIENT_SECRET}`,
+> `${SECRET_TOKENS}`). Then `deploy/deploy.sh` builds and deploys the
 > service, and you come back here for step 1 (register the callback
 > URL) and step 3 (run the authorization flow).
 
@@ -125,7 +125,7 @@ locked edge is never touched; it picks up the token on its next call.
 ```
 local uvicorn  --(temporary https tunnel)-->  Intuit consent
       |
-      writes token version --> Secret Manager (mwl-qb-tokens)
+      writes token version --> Secret Manager (${SECRET_TOKENS})
       |
 deployed qb-service reads it on the next QBO call
 ```
@@ -137,10 +137,10 @@ self-sustains via rotation (§4). You only repeat it on revoke / scope change /
 ### Prerequisites
 
 - **Production** Intuit app keys (client id + secret) from the Intuit console.
-- The `mwl-qb-tokens` secret already **exists** in the target project (it can
+- The `${SECRET_TOKENS}` secret already **exists** in the target project (it can
   be empty). See [`iam-setup.md`](iam-setup.md).
 - Your Google identity holds **`roles/secretmanager.secretVersionAdder`** (and
-  `secretAccessor`) on `mwl-qb-tokens`, then:
+  `secretAccessor`) on `${SECRET_TOKENS}`, then:
   ```bash
   gcloud auth application-default login
   ```
@@ -175,7 +175,7 @@ self-sustains via rotation (§4). You only repeat it on revoke / scope change /
    QBSVC_INTUIT_ENVIRONMENT=production \
    QBSVC_TOKEN_BACKEND=secret_manager \
    QBSVC_GCP_PROJECT='<target-project>' \
-   QBSVC_SECRET_NAME_TOKENS=mwl-qb-tokens \
+   QBSVC_SECRET_NAME_TOKENS=${SECRET_TOKENS} \
    QBSVC_ADMIN_ALLOWLIST= \
    QBSVC_OAUTH_REDIRECT_URI='https://<tunnel-subdomain>.ngrok-free.app/admin/oauth/callback' \
    uv run uvicorn qbsvc.main:app --port 8080
@@ -191,7 +191,7 @@ self-sustains via rotation (§4). You only repeat it on revoke / scope change /
 
 5. Approve consent as the QuickBooks admin **for the production realm**. Intuit
    redirects your browser → tunnel → local `/admin/oauth/callback`, which
-   exchanges the code and writes a **new version** of `mwl-qb-tokens`.
+   exchanges the code and writes a **new version** of `${SECRET_TOKENS}`.
 
 6. **Tear down immediately:** stop uvicorn, stop the tunnel, and **delete the
    tunnel redirect URI** from the Intuit console (it's now dead). Restore your
@@ -218,7 +218,7 @@ The tunnel bootstrap (§3a) is an operator fallback. For a real, user-facing
 companion — the same image as a *public* Cloud Run service that hosts only
 `/admin/oauth/*` (data routes off), gated by a signed **launch token** the
 consuming app mints (not Cloud Run IAM, which a browser can't satisfy). Both
-services share the `mwl-qb-tokens` secret, so a connect/re-auth done through
+services share the `${SECRET_TOKENS}` secret, so a connect/re-auth done through
 `qb-admin` is immediately live for the IAM-locked `qb-service`.
 
 This replaces the throwaway tunnel for production: register
@@ -294,7 +294,7 @@ for the connect flow (§3).
 
 ## Admin gate (issue #13)
 
-`/admin/oauth/*` is operator-only — the Lab Intake web app's runtime service
+`/admin/oauth/*` is operator-only — the consuming web app's runtime service
 account must **not** be able to call it, because doing so could pivot the
 service onto a different Intuit realm or invalidate the refresh token.
 

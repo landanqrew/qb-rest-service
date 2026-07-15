@@ -18,7 +18,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="qb-service",
-        description="Thin REST proxy in front of QuickBooks Online for the Martin Water Labs Lab Intake app.",
+        description="Thin REST proxy in front of QuickBooks Online for a consuming web app.",
         version="0.1.0",
     )
     # Middleware stack (outermost → innermost):

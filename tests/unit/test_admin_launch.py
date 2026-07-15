@@ -1,7 +1,7 @@
 """Unit tests for the browser-safe OAuth *launch token* (issue #51).
 
 A launch token is a short-lived, HMAC-signed capability minted by the consuming
-app (e.g. Sample Manager, which already gates its own admins) and carried on the
+app (e.g. consuming app, which already gates its own admins) and carried on the
 `/admin/oauth/start` link. It lets a real browser start the Intuit OAuth flow
 without a Cloud Run identity token, while keeping random public visitors out:
 they cannot forge a token without the shared secret.

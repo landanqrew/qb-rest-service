@@ -149,6 +149,11 @@ def get_token_store(settings: Settings = Depends(get_settings)) -> TokenStore:
             raise ValueError(
                 "QBSVC_GCP_PROJECT is required when QBSVC_TOKEN_BACKEND=secret_manager"
             )
+        if not settings.secret_name_tokens:
+            raise ValueError(
+                "QBSVC_SECRET_NAME_TOKENS is required when "
+                "QBSVC_TOKEN_BACKEND=secret_manager"
+            )
         return _secret_manager_token_store(
             settings.gcp_project, settings.secret_name_tokens
         )

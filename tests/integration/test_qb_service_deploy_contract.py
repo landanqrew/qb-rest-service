@@ -71,6 +71,13 @@ def test_deploy_script_is_iam_locked_and_admin_routes_off():
     assert "QBSVC_OAUTH_REDIRECT_URI=" not in text
 
 
+def test_deploy_script_keeps_image_name_decoupled_from_service_name():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'IMAGE_NAME="${IMAGE_NAME:-qb-service}"' in text
+    assert '${AR_REPO}/${IMAGE_NAME}:${GIT_SHA}' in text
+    assert '${AR_REPO}/${SERVICE}:${GIT_SHA}' not in text
+
+
 def test_deploy_script_does_not_direct_operators_to_locked_oauth_start():
     """Issue #52 item 5: the old next-steps output told operators to browse
     `${URL}/admin/oauth/start` on the IAM-locked service, which cannot work.
@@ -83,7 +90,7 @@ def test_deploy_script_does_not_direct_operators_to_locked_oauth_start():
     assert "${URL}/admin/oauth/start" not in text
     assert "admin identity" not in text
     # Points operators at the browser-safe bootstrap service for OAuth, and
-    # surfaces the two-URL Sample Manager config from the acceptance criteria.
+    # surfaces the two-URL consuming app config from the acceptance criteria.
     assert "qb-admin" in text
     assert "QB_OAUTH_START_URL=" in text
 

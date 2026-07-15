@@ -1,7 +1,7 @@
 # qb-service — Project Context
 
 ## Project Overview
-FastAPI service that fronts the QuickBooks Online REST API for a Lab Intake web app. Owns Intuit OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. Holds **no business data** — every request hits QBO live. Forked from `quickbooks-cli` (sibling repo).
+FastAPI service that fronts the QuickBooks Online REST API for a consuming web app. Owns Intuit OAuth, token refresh, rate-limit handling, and the QBO request/response quirks. Holds **no business data** — every request hits QBO live. Forked from `quickbooks-cli` (sibling repo).
 
 Single QBO realm. Deployed to Cloud Run with IAM-based auth for callers.
 

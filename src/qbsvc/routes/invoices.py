@@ -97,7 +97,7 @@ def get_invoice(
 
 
 # Intuit's "Duplicate Document Number Exists" fault code. Surfaced as HTTP
-# 409 so the Lab Intake app can dedupe on the deterministic lab number
+# 409 so the consuming app can dedupe on the deterministic lab number
 # without retrying or guessing. See scope §12.
 _DUPLICATE_DOC_NUMBER_CODE = "6240"
 
@@ -122,7 +122,7 @@ class InvoiceCreate(BaseModel):
     """Request body for `POST /v1/invoices`.
 
     Mirrors scope §6 — `customer_id` + `doc_number` are required, everything
-    else is optional, and `lines` may be empty (Phase 3 of the Lab Intake
+    else is optional, and `lines` may be empty (Phase 3 of the Consuming App
     flow creates the invoice empty, then appends lines via #9).
     """
 

@@ -36,7 +36,7 @@ from qbsvc.main import create_app
 
 REDIRECT_URI = "https://qb-admin.example.com/admin/oauth/callback"
 LAUNCH_SECRET = "shared-launch-secret"
-RETURN_URL = "https://sample-manager.example.com/settings/integrations"
+RETURN_URL = "https://your-app.example.com/settings/integrations"
 
 
 @pytest.fixture(autouse=True)
@@ -209,14 +209,14 @@ def test_callback_redirects_to_return_url_on_success(
 
     resp = client.get(
         "/admin/oauth/callback",
-        params={"code": "auth-code", "realmId": "9341454312345678", "state": state},
+        params={"code": "auth-code", "realmId": "1234567890", "state": state},
     )
     assert resp.status_code == 303
     loc = resp.headers["location"]
     assert loc.startswith(RETURN_URL)
     q = parse_qs(urlparse(loc).query)
     assert q["qb_connected"] == ["1"]
-    assert q["realmId"] == ["9341454312345678"]
+    assert q["realmId"] == ["1234567890"]
     # Token still persisted through the existing store.
     saved = token_store.load()
     assert saved is not None and saved.refresh_token == "new-refresh"
