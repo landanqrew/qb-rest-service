@@ -562,6 +562,80 @@ def test_create_passes_optional_txn_date_and_memos(settings_env, token_store):
     assert resp.status_code == 201
 
 
+def test_create_passes_custom_fields_to_qbo(settings_env, token_store):
+    """Generic custom-field pass-through: caller supplies DefinitionId + value
+    and we forward them as QBO CustomField entries unchanged, so the service
+    stays agnostic to which fields a given realm has configured.
+    """
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["CustomField"] == [
+            {"DefinitionId": "1", "StringValue": "PO-4471"},
+            {"DefinitionId": "2", "StringValue": "JD"},
+        ]
+        return _post_response(_invoice("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "custom_fields": [
+                {"definition_id": "1", "value": "PO-4471"},
+                {"definition_id": "2", "value": "JD"},
+            ],
+        },
+    )
+    assert resp.status_code == 201
+
+
+def test_create_without_custom_fields_omits_custom_field_key(settings_env, token_store):
+    def handler(request):
+        assert "CustomField" not in json.loads(request.content)
+        return _post_response(_invoice("99"))
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={"customer_id": "55", "doc_number": "26-02-0099"},
+    )
+    assert resp.status_code == 201
+
+
+def test_create_custom_field_value_too_long_returns_422(settings_env, token_store):
+    """QBO StringValue caps at 31 chars — reject longer up front, not at QBO."""
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "custom_fields": [{"definition_id": "1", "value": "x" * 32}],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_create_custom_field_non_numeric_definition_id_returns_422(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when the request body fails validation")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.post(
+        "/v1/invoices",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0099",
+            "custom_fields": [{"definition_id": "abc", "value": "PO-4471"}],
+        },
+    )
+    assert resp.status_code == 422
+
+
 def test_create_duplicate_doc_number_returns_409(settings_env, token_store):
     """Acceptance: Intuit error 6240 (Duplicate Document Number) → HTTP 409
     with code QBO_DUPLICATE_DOCNUMBER. Consuming App retries with the same

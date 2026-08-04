@@ -118,6 +118,26 @@ class InvoiceLineCreate(BaseModel):
     description: str | None = None
 
 
+class CustomFieldInput(BaseModel):
+    """One QBO transaction custom field, addressed by its `DefinitionId`.
+
+    Custom fields (e.g. "P.O. Number", "Sales Rep") are realm-configured and
+    their `DefinitionId`s differ per QBO environment, so the service stays
+    generic: callers supply the id + value and we pass them straight through.
+    Only `StringType` is API-writable, so `value` is always a string.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # DefinitionId is a small numeric string assigned per realm; pin it to
+    # digits so a stray value can't smuggle unexpected keys into the payload.
+    definition_id: str = Field(pattern=r"^\d{1,10}$")
+    # QBO stores StringValue as a string capped at 31 chars; reject longer
+    # values here so callers get a 422 with the field name rather than an
+    # opaque 502 from QBO downstream.
+    value: str = Field(max_length=31)
+
+
 class InvoiceCreate(BaseModel):
     """Request body for `POST /v1/invoices`.
 
@@ -137,6 +157,7 @@ class InvoiceCreate(BaseModel):
     lines: list[InvoiceLineCreate] = Field(default_factory=list)
     memo: str | None = None
     customer_memo: str | None = None
+    custom_fields: list[CustomFieldInput] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _every_line_must_have_rate(self) -> "InvoiceCreate":
@@ -187,6 +208,14 @@ def _payload_to_qbo_body(payload: InvoiceCreate) -> dict[str, Any]:
         body["PrivateNote"] = payload.memo
     if payload.customer_memo is not None:
         body["CustomerMemo"] = {"value": payload.customer_memo}
+    if payload.custom_fields:
+        # Pass DefinitionId + StringValue straight through; QBO echoes back
+        # Name/Type on the response. Realm-specific DefinitionId knowledge
+        # lives with the caller, keeping this service environment-agnostic.
+        body["CustomField"] = [
+            {"DefinitionId": cf.definition_id, "StringValue": cf.value}
+            for cf in payload.custom_fields
+        ]
     if payload.lines:
         # An empty `lines` list intentionally omits Line entirely — QBO
         # rejects Invoice create with an empty Line array.
