@@ -175,6 +175,20 @@ class InvoiceCreate(BaseModel):
         return self
 
 
+# Intuit requires this `include` query param on invoice writes that set
+# custom fields; without it QBO can silently drop custom fields in realms
+# that have the enhanced custom-field feature enabled. Only sent when a write
+# actually carries custom fields so ordinary invoices keep a minimal request.
+# https://developer.intuit.com/app/developer/qbo/docs/workflows/create-custom-fields/use-cases
+_ENHANCED_CUSTOM_FIELDS_INCLUDE = "enhancedAllCustomFields"
+
+
+def _custom_field_write_params(payload: InvoiceCreate) -> dict[str, str] | None:
+    if payload.custom_fields:
+        return {"include": _ENHANCED_CUSTOM_FIELDS_INCLUDE}
+    return None
+
+
 def _line_to_qbo(line: InvoiceLineCreate) -> dict[str, Any]:
     detail: dict[str, Any] = {
         "ItemRef": {"value": line.item_id},
@@ -245,7 +259,11 @@ def create_invoice(
 ) -> JSONResponse:
     qbo_body = _payload_to_qbo_body(payload)
     try:
-        resp = client.post("invoice", json_body=qbo_body)
+        resp = client.post(
+            "invoice",
+            json_body=qbo_body,
+            params=_custom_field_write_params(payload),
+        )
     except AuthError as exc:
         return error_response(exc.code, str(exc), 503)
     except TokenStoreError as exc:
@@ -375,6 +393,7 @@ def _execute_invoice_write(
     *,
     invoice_id: str,
     operation: str | None = None,
+    include: str | None = None,
 ) -> JSONResponse:
     """POST the write phase of an invoice mutation and wrap the result.
 
@@ -384,9 +403,13 @@ def _execute_invoice_write(
     everything else → 502. Returns the entity QBO echoes back (the updated
     invoice, or the delete confirmation stub) in the DetailResponse envelope.
     """
-    params = {"operation": operation} if operation is not None else None
+    params: dict[str, str] = {}
+    if operation is not None:
+        params["operation"] = operation
+    if include is not None:
+        params["include"] = include
     try:
-        resp = client.post("invoice", json_body=body, params=params)
+        resp = client.post("invoice", json_body=body, params=params or None)
     except AuthError as exc:
         return error_response(exc.code, str(exc), 503)
     except TokenStoreError as exc:
@@ -551,7 +574,13 @@ def replace_invoice(
     qbo_body.setdefault("Line", [])
     qbo_body["Id"] = invoice["Id"]
     qbo_body["SyncToken"] = invoice["SyncToken"]
-    return _execute_invoice_write(client, qbo_body, invoice_id=invoice_id)
+    params = _custom_field_write_params(payload)
+    return _execute_invoice_write(
+        client,
+        qbo_body,
+        invoice_id=invoice_id,
+        include=params["include"] if params else None,
+    )
 
 
 @router.delete("/{invoice_id}")

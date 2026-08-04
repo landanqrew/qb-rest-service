@@ -573,6 +573,9 @@ def test_create_passes_custom_fields_to_qbo(settings_env, token_store):
             {"DefinitionId": "1", "StringValue": "PO-4471"},
             {"DefinitionId": "2", "StringValue": "JD"},
         ]
+        # Intuit requires include=enhancedAllCustomFields on custom-field
+        # writes or QBO can silently drop the fields in enhanced realms.
+        assert _include(request) == "enhancedAllCustomFields"
         return _post_response(_invoice("99"))
 
     client, _ = _make_client(token_store, handler)
@@ -593,6 +596,9 @@ def test_create_passes_custom_fields_to_qbo(settings_env, token_store):
 def test_create_without_custom_fields_omits_custom_field_key(settings_env, token_store):
     def handler(request):
         assert "CustomField" not in json.loads(request.content)
+        # No custom fields → the enhanced-custom-fields include is omitted so
+        # ordinary invoices keep a minimal request.
+        assert _include(request) is None
         return _post_response(_invoice("99"))
 
     client, _ = _make_client(token_store, handler)
@@ -601,6 +607,56 @@ def test_create_without_custom_fields_omits_custom_field_key(settings_env, token
         json={"customer_id": "55", "doc_number": "26-02-0099"},
     )
     assert resp.status_code == 201
+
+
+def test_put_replace_passes_custom_fields_and_include(settings_env, token_store):
+    """The full-replace path forwards custom fields and sends the required
+    include=enhancedAllCustomFields query param, same as create.
+    """
+    replaced = _invoice("42", SyncToken="4")
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert request.method == "POST"
+        body = json.loads(request.content)
+        assert body["CustomField"] == [{"DefinitionId": "1", "StringValue": "PO-4471"}]
+        assert _include(request) == "enhancedAllCustomFields"
+        return _post_response(replaced)
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0042",
+            "lines": [{"item_id": "9", "qty": 2, "rate": 75.0}],
+            "custom_fields": [{"definition_id": "1", "value": "PO-4471"}],
+        },
+    )
+    assert resp.status_code == 200
+
+
+def test_put_replace_without_custom_fields_omits_include(settings_env, token_store):
+    replaced = _invoice("42", SyncToken="4")
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": _invoice_for_append("42")})
+        assert request.method == "POST"
+        assert _include(request) is None
+        return _post_response(replaced)
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.put(
+        "/v1/invoices/42",
+        json={
+            "customer_id": "55",
+            "doc_number": "26-02-0042",
+            "lines": [{"item_id": "9", "qty": 2, "rate": 75.0}],
+        },
+    )
+    assert resp.status_code == 200
 
 
 def test_create_custom_field_value_too_long_returns_422(settings_env, token_store):
@@ -1275,6 +1331,11 @@ def test_append_line_invoice_with_no_existing_lines_works(settings_env, token_st
 def _operation(request: httpx.Request) -> str | None:
     """Pull the QBO `operation` query param off an outbound write request."""
     return parse_qs(urlparse(str(request.url)).query).get("operation", [None])[0]
+
+
+def _include(request: httpx.Request) -> str | None:
+    """Pull the QBO `include` query param off an outbound write request."""
+    return parse_qs(urlparse(str(request.url)).query).get("include", [None])[0]
 
 
 def _minorversion(request: httpx.Request) -> str | None:
