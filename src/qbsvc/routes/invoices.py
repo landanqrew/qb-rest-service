@@ -118,6 +118,28 @@ class InvoiceLineCreate(BaseModel):
     description: str | None = None
 
 
+class CustomFieldInput(BaseModel):
+    """One QBO transaction custom field, addressed by its `DefinitionId`.
+
+    Custom fields (e.g. "P.O. Number", "Sales Rep") are realm-configured and
+    their `DefinitionId`s differ per QBO environment, so the service stays
+    generic: callers supply the id + value and we pass them straight through.
+    Only `StringType` is API-writable, so `value` is always a string.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # DefinitionId is a small numeric string assigned per realm; pin it to
+    # ASCII digits so a stray value can't smuggle unexpected keys into the
+    # payload. `[0-9]` not `\d`: Python's `\d` also matches Unicode decimal
+    # digits (e.g. "١"), which would forward a bogus DefinitionId to QBO.
+    definition_id: str = Field(pattern=r"^[0-9]{1,10}$")
+    # QBO stores StringValue as a string capped at 31 chars; reject longer
+    # values here so callers get a 422 with the field name rather than an
+    # opaque 502 from QBO downstream.
+    value: str = Field(max_length=31)
+
+
 class InvoiceCreate(BaseModel):
     """Request body for `POST /v1/invoices`.
 
@@ -137,6 +159,7 @@ class InvoiceCreate(BaseModel):
     lines: list[InvoiceLineCreate] = Field(default_factory=list)
     memo: str | None = None
     customer_memo: str | None = None
+    custom_fields: list[CustomFieldInput] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _every_line_must_have_rate(self) -> "InvoiceCreate":
@@ -150,6 +173,20 @@ class InvoiceCreate(BaseModel):
                 "use POST /invoices/{id}/lines to append a rate-less line"
             )
         return self
+
+
+# Intuit requires this `include` query param on invoice writes that set
+# custom fields; without it QBO can silently drop custom fields in realms
+# that have the enhanced custom-field feature enabled. Only sent when a write
+# actually carries custom fields so ordinary invoices keep a minimal request.
+# https://developer.intuit.com/app/developer/qbo/docs/workflows/create-custom-fields/use-cases
+_ENHANCED_CUSTOM_FIELDS_INCLUDE = "enhancedAllCustomFields"
+
+
+def _custom_field_write_params(payload: InvoiceCreate) -> dict[str, str] | None:
+    if payload.custom_fields:
+        return {"include": _ENHANCED_CUSTOM_FIELDS_INCLUDE}
+    return None
 
 
 def _line_to_qbo(line: InvoiceLineCreate) -> dict[str, Any]:
@@ -187,6 +224,14 @@ def _payload_to_qbo_body(payload: InvoiceCreate) -> dict[str, Any]:
         body["PrivateNote"] = payload.memo
     if payload.customer_memo is not None:
         body["CustomerMemo"] = {"value": payload.customer_memo}
+    if payload.custom_fields:
+        # Pass DefinitionId + StringValue straight through; QBO echoes back
+        # Name/Type on the response. Realm-specific DefinitionId knowledge
+        # lives with the caller, keeping this service environment-agnostic.
+        body["CustomField"] = [
+            {"DefinitionId": cf.definition_id, "StringValue": cf.value}
+            for cf in payload.custom_fields
+        ]
     if payload.lines:
         # An empty `lines` list intentionally omits Line entirely — QBO
         # rejects Invoice create with an empty Line array.
@@ -214,7 +259,11 @@ def create_invoice(
 ) -> JSONResponse:
     qbo_body = _payload_to_qbo_body(payload)
     try:
-        resp = client.post("invoice", json_body=qbo_body)
+        resp = client.post(
+            "invoice",
+            json_body=qbo_body,
+            params=_custom_field_write_params(payload),
+        )
     except AuthError as exc:
         return error_response(exc.code, str(exc), 503)
     except TokenStoreError as exc:
@@ -344,6 +393,7 @@ def _execute_invoice_write(
     *,
     invoice_id: str,
     operation: str | None = None,
+    include: str | None = None,
 ) -> JSONResponse:
     """POST the write phase of an invoice mutation and wrap the result.
 
@@ -353,9 +403,13 @@ def _execute_invoice_write(
     everything else → 502. Returns the entity QBO echoes back (the updated
     invoice, or the delete confirmation stub) in the DetailResponse envelope.
     """
-    params = {"operation": operation} if operation is not None else None
+    params: dict[str, str] = {}
+    if operation is not None:
+        params["operation"] = operation
+    if include is not None:
+        params["include"] = include
     try:
-        resp = client.post("invoice", json_body=body, params=params)
+        resp = client.post("invoice", json_body=body, params=params or None)
     except AuthError as exc:
         return error_response(exc.code, str(exc), 503)
     except TokenStoreError as exc:
@@ -520,7 +574,13 @@ def replace_invoice(
     qbo_body.setdefault("Line", [])
     qbo_body["Id"] = invoice["Id"]
     qbo_body["SyncToken"] = invoice["SyncToken"]
-    return _execute_invoice_write(client, qbo_body, invoice_id=invoice_id)
+    params = _custom_field_write_params(payload)
+    return _execute_invoice_write(
+        client,
+        qbo_body,
+        invoice_id=invoice_id,
+        include=params["include"] if params else None,
+    )
 
 
 @router.delete("/{invoice_id}")

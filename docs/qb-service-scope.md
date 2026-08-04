@@ -1,6 +1,6 @@
 # QB Service — Project Scope (Option B)
 
-**Status:** Draft for review · 2026-05-21 · Amended 2026-06-06 (Amendment 1: full CRUD surface; Amendment 2: public pages service for Intuit production requirements — see amendment log)
+**Status:** Draft for review · 2026-05-21 · Amended 2026-06-06 (Amendment 1: full CRUD surface; Amendment 2: public pages service for Intuit production requirements) · Amended 2026-08-04 (Amendment 3: invoice custom-field pass-through — see amendment log)
 **Decision:** Locked on Option B (thin stateless REST proxy in front of QBO)
 **Repo plan:** Clone `quickbooks-cli` → new repo (working name `qb-service`). CLI stays where it is.
 
@@ -118,7 +118,7 @@ registered byte-for-byte in the Intuit developer console, so it must stay stable
 | DELETE | `/v1/items/{id}` | Deactivate (`Active: false`) — QBO cannot hard-delete items *(Amendment 1)* |
 | GET | `/v1/invoices` | List invoices. Query: `customer_id`, `doc_number`, `modified_since`, `limit`, `cursor` |
 | GET | `/v1/invoices/{id}` | Single invoice |
-| POST | `/v1/invoices` | Create invoice. Body: `{customer_id, doc_number, txn_date?, lines[], memo?}` |
+| POST | `/v1/invoices` | Create invoice. Body: `{customer_id, doc_number, txn_date?, lines[], memo?, customer_memo?, custom_fields[]?}` — `custom_fields[]` is `{definition_id, value}` *(Amendment 3)* |
 | POST | `/v1/invoices/{id}/lines` | Append a line. Body: `{item_id, qty, rate?, description?}` |
 | PUT | `/v1/invoices/{id}` | Full replace, SyncToken-aware *(Amendment 1 — previously deferred)* |
 | DELETE | `/v1/invoices/{id}` | Delete invoice (QBO `operation=delete`), SyncToken-aware *(Amendment 1)* |
@@ -312,6 +312,18 @@ Intuit requires a publicly reachable landing page, EULA URL, and privacy policy 
 - **Chosen:** a second, minimal public Cloud Run service (`qb-pages`) serving only static pages (§14). No secrets, no QBO access; blast radius of "public" is three HTML files.
 
 Also adds Phase 4b (§15) covering the launch sequence: pages service → deploy both services → Intuit production keys → OAuth bootstrap against the prod realm.
+
+### Amendment 3 — 2026-08-04: invoice custom-field pass-through
+
+Invoices can carry QBO transaction custom fields (e.g. "P.O. Number", "Sales Rep"). These are **realm-configured**: their `DefinitionId`s and labels differ per QBO environment, and QBO exposes no first-class field for them — they live in the transaction's `CustomField[]` array. Rather than hard-code specific fields, `POST /v1/invoices` (and, via the shared body model, `PUT /v1/invoices/{id}`) accept an optional `custom_fields[]` of `{definition_id, value}` pairs and forward them verbatim as QBO `CustomField` entries.
+
+- **The caller owns the `DefinitionId` map.** Keeping realm-specific ids out of the service leaves it environment-agnostic; the single consuming app already knows which realm it targets.
+- **Writes that set custom fields add `include=enhancedAllCustomFields`.** Intuit requires this query param on invoice writes carrying custom fields; without it QBO can silently drop them in realms with the enhanced custom-field feature enabled. The service sends it on create and full-replace only when `custom_fields` is present, so ordinary invoices keep a minimal request.
+- **Only `StringType` is API-writable**, so `value` is always a string. It's capped at 31 chars (QBO's `StringValue` limit) and `definition_id` is pinned to digits — both reject at the edge with a 422 rather than a downstream 502.
+- **No change to the sparse flows.** Line append/update/delete send sparse updates that omit `CustomField`, so QBO preserves existing values. GET/list already return the raw `CustomField` array. Full-replace (`PUT`) reuses the create body, so it carries custom fields too.
+- **Not queryable.** QBO's query language can't filter on `CustomField`, so there is no list filter for custom-field values.
+
+A future amendment could add a discovery endpoint (`GET /v1/invoices/custom-fields`) so callers resolve names → `DefinitionId`s dynamically instead of holding the map, but that depends on QBO's awkward `Preferences.SalesFormsPrefs` source and is deferred until a consumer needs it.
 
 ## Review checklist
 
