@@ -130,8 +130,10 @@ class CustomFieldInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # DefinitionId is a small numeric string assigned per realm; pin it to
-    # digits so a stray value can't smuggle unexpected keys into the payload.
-    definition_id: str = Field(pattern=r"^\d{1,10}$")
+    # ASCII digits so a stray value can't smuggle unexpected keys into the
+    # payload. `[0-9]` not `\d`: Python's `\d` also matches Unicode decimal
+    # digits (e.g. "١"), which would forward a bogus DefinitionId to QBO.
+    definition_id: str = Field(pattern=r"^[0-9]{1,10}$")
     # QBO stores StringValue as a string capped at 31 chars; reject longer
     # values here so callers get a 422 with the field name rather than an
     # opaque 502 from QBO downstream.
