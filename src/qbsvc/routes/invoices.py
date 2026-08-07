@@ -93,7 +93,15 @@ def get_invoice(
             "invoice_id must be a numeric QBO entity id",
             400,
         )
-    return get_entity_detail(client, entity="Invoice", entity_id=invoice_id)
+    # Enhanced QBO realms can return only custom-field definitions unless
+    # this include is present. Opt in on detail reads so populated
+    # CustomField.StringValue properties reach callers too.
+    return get_entity_detail(
+        client,
+        entity="Invoice",
+        entity_id=invoice_id,
+        params={"include": _ENHANCED_CUSTOM_FIELDS_INCLUDE},
+    )
 
 
 # Intuit's "Duplicate Document Number Exists" fault code. Surfaced as HTTP
@@ -138,6 +146,21 @@ class CustomFieldInput(BaseModel):
     # values here so callers get a 422 with the field name rather than an
     # opaque 502 from QBO downstream.
     value: str = Field(max_length=31)
+
+
+class InvoiceCustomFieldsUpdate(BaseModel):
+    """Custom fields changed independently of all other invoice state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    custom_fields: list[CustomFieldInput] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _definition_ids_must_be_unique(self) -> "InvoiceCustomFieldsUpdate":
+        definition_ids = [field.definition_id for field in self.custom_fields]
+        if len(definition_ids) != len(set(definition_ids)):
+            raise ValueError("custom_fields must not repeat a definition_id")
+        return self
 
 
 class InvoiceCreate(BaseModel):
@@ -189,6 +212,15 @@ def _custom_field_write_params(payload: InvoiceCreate) -> dict[str, str] | None:
     return None
 
 
+def _custom_fields_to_qbo(
+    custom_fields: list[CustomFieldInput],
+) -> list[dict[str, str]]:
+    return [
+        {"DefinitionId": field.definition_id, "StringValue": field.value}
+        for field in custom_fields
+    ]
+
+
 def _line_to_qbo(line: InvoiceLineCreate) -> dict[str, Any]:
     detail: dict[str, Any] = {
         "ItemRef": {"value": line.item_id},
@@ -228,10 +260,7 @@ def _payload_to_qbo_body(payload: InvoiceCreate) -> dict[str, Any]:
         # Pass DefinitionId + StringValue straight through; QBO echoes back
         # Name/Type on the response. Realm-specific DefinitionId knowledge
         # lives with the caller, keeping this service environment-agnostic.
-        body["CustomField"] = [
-            {"DefinitionId": cf.definition_id, "StringValue": cf.value}
-            for cf in payload.custom_fields
-        ]
+        body["CustomField"] = _custom_fields_to_qbo(payload.custom_fields)
     if payload.lines:
         # An empty `lines` list intentionally omits Line entirely — QBO
         # rejects Invoice create with an empty Line array.
@@ -580,6 +609,44 @@ def replace_invoice(
         qbo_body,
         invoice_id=invoice_id,
         include=params["include"] if params else None,
+    )
+
+
+@router.patch("/{invoice_id}/custom-fields")
+def update_invoice_custom_fields(
+    invoice_id: str,
+    payload: InvoiceCustomFieldsUpdate,
+    client: Annotated[QBClient, Depends(get_qb_client)],
+) -> JSONResponse:
+    """Sparse-update only the named custom fields on an invoice.
+
+    QBO leaves every omitted property untouched when ``sparse`` is true, so
+    this route cannot replace lines or clear fields the service does not
+    model. An empty StringValue intentionally clears that one custom field.
+    """
+    if not _INVOICE_ID_RE.fullmatch(invoice_id):
+        return error_response(
+            "INVALID_PARAM",
+            "invoice_id must be a numeric QBO entity id",
+            400,
+        )
+
+    invoice, err = _load_invoice_for_write(client, invoice_id)
+    if err is not None:
+        return err
+    assert invoice is not None
+
+    sparse_body = {
+        "Id": invoice["Id"],
+        "SyncToken": invoice["SyncToken"],
+        "sparse": True,
+        "CustomField": _custom_fields_to_qbo(payload.custom_fields),
+    }
+    return _execute_invoice_write(
+        client,
+        sparse_body,
+        invoice_id=invoice_id,
+        include=_ENHANCED_CUSTOM_FIELDS_INCLUDE,
     )
 
 

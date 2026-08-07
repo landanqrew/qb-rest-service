@@ -350,6 +350,32 @@ def test_detail_returns_invoice_with_full_line_array(settings_env, token_store):
     assert "SubTotalLineDetail" in subtotal
 
 
+def test_detail_requests_enhanced_custom_field_values(settings_env, token_store):
+    """Invoice detail reads opt into enhanced custom fields so populated
+    StringValue properties are present, not just Name/Type/DefinitionId.
+    """
+    invoice = _invoice(
+        "42",
+        CustomField=[
+            {
+                "DefinitionId": "1000000001",
+                "Name": "P.O. Number",
+                "Type": "StringType",
+                "StringValue": "Black Swan API",
+            }
+        ],
+    )
+
+    def handler(request):
+        assert _include(request) == "enhancedAllCustomFields"
+        return httpx.Response(200, json={"Invoice": invoice})
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.get("/v1/invoices/42")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["CustomField"][0]["StringValue"] == "Black Swan API"
+
+
 def test_detail_invalid_id_rejected_without_hitting_qbo(settings_env, token_store):
     """Defence-in-depth: a non-numeric invoice_id must produce a clean 400
     rather than an opaque QBO error.
@@ -707,6 +733,93 @@ def test_create_custom_field_unicode_digit_definition_id_returns_422(settings_en
             "customer_id": "55",
             "doc_number": "26-02-0099",
             "custom_fields": [{"definition_id": "١", "value": "PO-4471"}],
+        },
+    )
+    assert resp.status_code == 422
+
+
+# ---------- custom-field sparse update endpoint ----------
+
+
+def test_patch_custom_fields_sends_only_sparse_custom_field_update(
+    settings_env, token_store
+):
+    """Changing custom fields must not resend lines, dates, addresses, or any
+    other invoice state that QBO could clear or recompute.
+    """
+    current = _invoice_for_append("42", sync_token="7")
+    updated = _invoice(
+        "42",
+        SyncToken="8",
+        CustomField=[
+            {
+                "DefinitionId": "1000000001",
+                "Name": "P.O. Number",
+                "Type": "StringType",
+                "StringValue": "Black Swan API",
+            },
+            {
+                "DefinitionId": "1000000002",
+                "Name": "Sales Rep",
+                "Type": "StringType",
+                "StringValue": "Jack Horton API",
+            },
+        ],
+    )
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"Invoice": current})
+        assert request.method == "POST"
+        assert _include(request) == "enhancedAllCustomFields"
+        assert json.loads(request.content) == {
+            "Id": "42",
+            "SyncToken": "7",
+            "sparse": True,
+            "CustomField": [
+                {"DefinitionId": "1000000001", "StringValue": "Black Swan API"},
+                {"DefinitionId": "1000000002", "StringValue": "Jack Horton API"},
+            ],
+        }
+        return _post_response(updated)
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.patch(
+        "/v1/invoices/42/custom-fields",
+        json={
+            "custom_fields": [
+                {"definition_id": "1000000001", "value": "Black Swan API"},
+                {"definition_id": "1000000002", "value": "Jack Horton API"},
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["SyncToken"] == "8"
+
+
+def test_patch_custom_fields_rejects_empty_list(settings_env, token_store):
+    def handler(request):
+        pytest.fail("QBO must not be hit when custom_fields is empty")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.patch("/v1/invoices/42/custom-fields", json={"custom_fields": []})
+    assert resp.status_code == 422
+
+
+def test_patch_custom_fields_rejects_duplicate_definition_ids(
+    settings_env, token_store
+):
+    def handler(request):
+        pytest.fail("QBO must not be hit for duplicate custom-field definitions")
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.patch(
+        "/v1/invoices/42/custom-fields",
+        json={
+            "custom_fields": [
+                {"definition_id": "1", "value": "first"},
+                {"definition_id": "1", "value": "second"},
+            ]
         },
     )
     assert resp.status_code == 422

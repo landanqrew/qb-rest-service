@@ -45,3 +45,17 @@ Src layout: `src/qbsvc/`. Build backend: setuptools.
 
 ## Related projects
 - `quickbooks-cli` at `../quickbooks-cli` — the laptop CLI this service was forked from. Different use case; keeps its own independent OAuth setup and adds payments/estimates/vendors/bills/P&L commands the service does not.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the standard `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix` labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. See `docs/agents/domain.md`.

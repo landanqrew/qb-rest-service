@@ -154,6 +154,7 @@ def get_entity_detail(
     entity: str,
     entity_id: str,
     label: str | None = None,
+    params: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Fetch a single QBO entity by id and wrap it in the detail envelope.
 
@@ -164,7 +165,7 @@ def get_entity_detail(
     label = label or entity
     endpoint_path = entity.lower()
     try:
-        resp = client.get(f"{endpoint_path}/{entity_id}")
+        resp = client.get(f"{endpoint_path}/{entity_id}", params=params)
     except AuthError as exc:
         return error_response(exc.code, str(exc), 503)
     except TokenStoreError as exc:

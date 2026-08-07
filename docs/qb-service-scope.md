@@ -120,6 +120,7 @@ registered byte-for-byte in the Intuit developer console, so it must stay stable
 | GET | `/v1/invoices/{id}` | Single invoice |
 | POST | `/v1/invoices` | Create invoice. Body: `{customer_id, doc_number, txn_date?, lines[], memo?, customer_memo?, custom_fields[]?}` — `custom_fields[]` is `{definition_id, value}` *(Amendment 3)* |
 | POST | `/v1/invoices/{id}/lines` | Append a line. Body: `{item_id, qty, rate?, description?}` |
+| PATCH | `/v1/invoices/{id}/custom-fields` | Sparse-update only invoice custom fields. Body: `{custom_fields[]}` |
 | PUT | `/v1/invoices/{id}` | Full replace, SyncToken-aware *(Amendment 1 — previously deferred)* |
 | DELETE | `/v1/invoices/{id}` | Delete invoice (QBO `operation=delete`), SyncToken-aware *(Amendment 1)* |
 | POST | `/v1/invoices/{id}/void` | Void invoice (QBO `operation=void` — record survives at $0), SyncToken-aware *(Amendment 1)* |
@@ -321,6 +322,8 @@ Invoices can carry QBO transaction custom fields (e.g. "P.O. Number", "Sales Rep
 - **Writes that set custom fields add `include=enhancedAllCustomFields`.** Intuit requires this query param on invoice writes carrying custom fields; without it QBO can silently drop them in realms with the enhanced custom-field feature enabled. The service sends it on create and full-replace only when `custom_fields` is present, so ordinary invoices keep a minimal request.
 - **Only `StringType` is API-writable**, so `value` is always a string. It's capped at 31 chars (QBO's `StringValue` limit) and `definition_id` is pinned to digits — both reject at the edge with a 422 rather than a downstream 502.
 - **No change to the sparse flows.** Line append/update/delete send sparse updates that omit `CustomField`, so QBO preserves existing values. GET/list already return the raw `CustomField` array. Full-replace (`PUT`) reuses the create body, so it carries custom fields too.
+- **Custom-field-only updates are sparse.** `PATCH /v1/invoices/{id}/custom-fields` reads the current `SyncToken`, then sends only `Id`, `SyncToken`, `sparse: true`, and `CustomField` to QBO. Lines, dates, addresses, totals, and all other invoice fields are untouched.
+- **Invoice detail reads request enhanced values.** `GET /v1/invoices/{id}` sends `include=enhancedAllCustomFields`; without it, enhanced realms can return field definitions without populated `StringValue` properties.
 - **Not queryable.** QBO's query language can't filter on `CustomField`, so there is no list filter for custom-field values.
 
 A future amendment could add a discovery endpoint (`GET /v1/invoices/custom-fields`) so callers resolve names → `DefinitionId`s dynamically instead of holding the map, but that depends on QBO's awkward `Preferences.SalesFormsPrefs` source and is deferred until a consumer needs it.
