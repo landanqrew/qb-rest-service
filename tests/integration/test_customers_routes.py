@@ -409,6 +409,39 @@ def test_detail_pseudonym_stub_returns_404(settings_env, token_store):
     assert "99999999" in body["error"]["message"]
 
 
+def test_detail_2010_validation_fault_returns_404(settings_env, token_store):
+    """Regression (#45 follow-up): QBO's *current* answer to a by-id read of a
+    missing Customer is HTTP 400 ValidationFault code 2010 ("Request has
+    invalid or unsupported property") — not the 200 pseudonym stub seen
+    earlier, and not the 610 Item/Invoice fault. The route must still 404.
+
+    Body/code mirror the real sandbox response captured against the live API.
+    """
+    def handler(request):
+        return httpx.Response(
+            400,
+            json={
+                "Fault": {
+                    "Error": [
+                        {
+                            "Message": "Request has invalid or unsupported property",
+                            "Detail": "Request has invalid or unsupported property",
+                            "code": "2010",
+                        }
+                    ],
+                    "type": "ValidationFault",
+                }
+            },
+        )
+
+    client, _ = _make_client(token_store, handler)
+    resp = client.get("/v1/customers/99999999")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert "99999999" in body["error"]["message"]
+
+
 def test_detail_propagates_qbo_5xx_as_502(settings_env, token_store):
     def handler(request):
         return httpx.Response(500, json={"Fault": {"Error": [{"Message": "boom"}]}})

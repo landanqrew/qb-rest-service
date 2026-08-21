@@ -40,6 +40,33 @@ def test_is_not_found_false_on_500():
     assert is_not_found(APIError(500, "Object Not Found")) is False
 
 
+def _fault(code: str, message: str) -> dict:
+    return {"Fault": {"Error": [{"Message": message, "Detail": message, "code": code}]}}
+
+
+def test_is_not_found_true_on_610_fault_code():
+    exc = APIError(400, "Object Not Found", raw=_fault("610", "Object Not Found"))
+    assert is_not_found(exc) is True
+
+
+def test_is_not_found_true_on_2010_fault_code():
+    # Regression: a by-id GET of a missing Customer returns HTTP 400 with the
+    # generic ValidationFault code 2010 (message doesn't contain "object not
+    # found"), so only the fault-code path catches it.
+    exc = APIError(
+        400,
+        "Request has invalid or unsupported property",
+        raw=_fault("2010", "Request has invalid or unsupported property"),
+    )
+    assert is_not_found(exc) is True
+
+
+def test_is_not_found_false_on_unrelated_fault_code():
+    # 6240 is duplicate-name/DocNumber, not a miss — must not be masked as 404.
+    exc = APIError(400, "Duplicate Name Exists", raw=_fault("6240", "Duplicate"))
+    assert is_not_found(exc) is False
+
+
 # --------------------------------------------------------------------------- #
 # is_pseudonym_miss — 200 stub misses (Customer, Vendor, …)
 # --------------------------------------------------------------------------- #

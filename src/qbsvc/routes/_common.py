@@ -48,14 +48,41 @@ def error_response(
     return error_envelope(code, message, status, qbo_detail=qbo_detail)
 
 
+# QBO fault codes that mean "the entity you read by id does not exist".
+#   610  — "Object Not Found". Item, Invoice, and most transaction entities.
+#   2010 — "Request has invalid or unsupported property". A *generic* validation
+#          code, but it is what a by-id GET of a missing name-list entity
+#          (Customer, Vendor, …) returns. QBO's behaviour here has drifted:
+#          it has also been observed returning a 200 "pseudonym" stub
+#          (see is_pseudonym_miss) for the same case. We accept both signals.
+# 2010 is only treated as not-found because is_not_found() is called *only*
+# after a read/load of a specific entity by id (get_entity_detail, the item /
+# invoice sparse-update loaders) — never to interpret a create/update body,
+# where 2010 would legitimately mean a malformed request. Keep it that way.
+_NOT_FOUND_FAULT_CODES = frozenset({"610", "2010"})
+
+
+def _has_not_found_fault_code(exc: APIError) -> bool:
+    if not isinstance(exc.raw, dict):
+        return False
+    fault = exc.raw.get("Fault") or {}
+    for error in fault.get("Error", []):
+        if str(error.get("code", "")) in _NOT_FOUND_FAULT_CODES:
+            return True
+    return False
+
+
 def is_not_found(exc: APIError) -> bool:
-    # QBO surfaces missing entities as HTTP 400 with Fault.Error code 610
-    # ("Object Not Found"); some endpoints also return a plain 404. Detect
-    # both so callers see a clean 404 either way.
+    # Missing entities surface as a plain 404, or (more often) HTTP 400 with a
+    # Fault.Error code — detect both so callers see a clean 404 either way. The
+    # legacy message match stays as a fallback for faults that omit a code.
     if exc.status_code == 404:
         return True
-    if exc.status_code == 400 and "object not found" in exc.detail.lower():
-        return True
+    if exc.status_code == 400:
+        if "object not found" in exc.detail.lower():
+            return True
+        if _has_not_found_fault_code(exc):
+            return True
     return False
 
 
