@@ -82,3 +82,42 @@ def test_healthz_still_returns_200_with_file_backend():
     client = TestClient(create_app())
     resp = client.get("/healthz")
     assert resp.status_code == 200
+
+
+def test_secret_manager_backend_is_single_flight_under_concurrent_first_access():
+    """A cold instance can take several requests at once. Every one of them
+    must get the SAME store (and so the same refresh_lock) — lru_cache alone
+    isn't single-flight, so concurrent first misses each built their own
+    store and all refreshed with Intuit at once (prod, 2026-09-28).
+    """
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    builds: list[object] = []
+
+    def slow_build():
+        # Widen the window so concurrent first callers overlap inside it.
+        time.sleep(0.1)
+        client = object()
+        builds.append(client)
+        return client
+
+    settings = Settings(
+        token_backend="secret_manager",
+        gcp_project="mwl-prod",
+        secret_name_tokens="mwl-qb-tokens",
+    )
+    barrier = threading.Barrier(4)
+
+    def worker():
+        barrier.wait(timeout=5)
+        return get_token_store(settings=settings)
+
+    with patch("qbsvc.deps._build_secret_manager_client", side_effect=slow_build):
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            stores = [f.result(timeout=5) for f in [ex.submit(worker) for _ in range(4)]]
+
+    assert len(builds) == 1, f"expected one Secret Manager client, built {len(builds)}"
+    assert all(s is stores[0] for s in stores)
+    assert len({id(s.refresh_lock) for s in stores}) == 1

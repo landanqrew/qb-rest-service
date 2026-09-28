@@ -7,6 +7,12 @@ from typing import Any
 from qbsvc.auth.tokens import TokenData
 from qbsvc.exceptions import TokenStoreError
 
+# Bound on each token read so a stalled Secret Manager call fails fast instead
+# of hanging the request past the caller's own deadline. Writes keep the client
+# default: a save persists a refresh token Intuit has already rotated, so giving
+# up on it early is worse than waiting.
+_LOAD_TIMEOUT_SECONDS = 10.0
+
 # Written by clear() to mark the connection as torn down. An empty JSON object
 # has none of TokenData's required keys, so load() resolves it to None.
 _TOMBSTONE = b"{}"
@@ -60,7 +66,9 @@ class SecretManagerTokenStore:
 
         name = f"projects/{self._project}/secrets/{self._secret}/versions/latest"
         try:
-            response = self._client.access_secret_version(request={"name": name})
+            response = self._client.access_secret_version(
+                request={"name": name}, timeout=_LOAD_TIMEOUT_SECONDS
+            )
         except (gax_exc.NotFound, gax_exc.FailedPrecondition):
             return None
         except gax_exc.PermissionDenied as exc:

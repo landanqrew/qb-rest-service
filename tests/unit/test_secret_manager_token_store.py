@@ -271,3 +271,13 @@ def test_constructor_rejects_missing_required_args():
         SecretManagerTokenStore(project_id="p", secret_name="", client=client)
     with pytest.raises(ValueError, match="client"):
         SecretManagerTokenStore(project_id="p", secret_name="s", client=None)
+
+
+def test_load_bounds_the_secret_manager_call_with_a_timeout():
+    """A stalled Secret Manager read must fail fast rather than hang the
+    request past the caller's own deadline.
+    """
+    client = _fake_client_with_versions(_sample().to_dict())
+    _store(client).load()
+    _, kwargs = client.access_secret_version.call_args
+    assert kwargs.get("timeout") == 10.0

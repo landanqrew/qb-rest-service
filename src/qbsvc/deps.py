@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
 from typing import Any, Iterator
 
@@ -15,20 +16,37 @@ from qbsvc.auth.tokens import FileTokenStore, TokenStore
 from qbsvc.config import Settings, get_settings
 
 
-@lru_cache
+# Token stores are memoized by hand under a lock rather than with lru_cache:
+# lru_cache is not single-flight, so the several requests a cold instance
+# takes at once would each miss, build their own store (and refresh_lock),
+# and all refresh with Intuit concurrently.
+_token_store_lock = threading.Lock()
+_file_store: FileTokenStore | None = None
+_secret_manager_stores: dict[tuple[str, str], SecretManagerTokenStore] = {}
+
+
 def _file_token_store() -> FileTokenStore:
-    return FileTokenStore()
+    global _file_store
+    with _token_store_lock:
+        if _file_store is None:
+            _file_store = FileTokenStore()
+        return _file_store
 
 
-@lru_cache
 def _secret_manager_token_store(
     project_id: str, secret_name: str
 ) -> SecretManagerTokenStore:
-    return SecretManagerTokenStore(
-        project_id=project_id,
-        secret_name=secret_name,
-        client=_build_secret_manager_client(),
-    )
+    key = (project_id, secret_name)
+    with _token_store_lock:
+        store = _secret_manager_stores.get(key)
+        if store is None:
+            store = SecretManagerTokenStore(
+                project_id=project_id,
+                secret_name=secret_name,
+                client=_build_secret_manager_client(),
+            )
+            _secret_manager_stores[key] = store
+        return store
 
 
 @lru_cache(maxsize=1)
@@ -46,8 +64,10 @@ def _build_secret_manager_client() -> Any:
 
 def reset_token_store_cache() -> None:
     """Clear memoized token-store instances. For tests only."""
-    _file_token_store.cache_clear()
-    _secret_manager_token_store.cache_clear()
+    global _file_store
+    with _token_store_lock:
+        _file_store = None
+        _secret_manager_stores.clear()
     _build_secret_manager_client.cache_clear()
 
 
